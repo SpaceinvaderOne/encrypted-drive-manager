@@ -1,0 +1,3427 @@
+Menu="Utilities"
+Title="Encrypted Drive Manager"
+Icon="EDM-Icon.png"
+---
+<?
+# Get CSRF token from Unraid's variable system
+$csrf_token = $var['csrf_token'] ?? '';
+
+# Get plugin version
+$version_file = '/usr/local/emhttp/plugins/encrypted-drive-manager/VERSION';
+$version = file_exists($version_file) ? trim(file_get_contents($version_file)) : 'Unknown';
+?>
+
+<div style="color: #F15A2C; font-weight: bold; font-size: 12px; margin-bottom: 10px;">
+Plugin Version: <?=$version?>
+</div>
+
+<div style="margin-bottom: 20px; color: var(--text-color, #333);">
+This plugin provides comprehensive encrypted drive management with tools for auto-unlock at boot, LUKS header backup, key management, and encryption analysis. Choose which tool to use from the tabs below.
+</div>
+
+<style>
+/* Status output container */
+#statusOutput {
+  padding: 15px;
+  border-radius: 5px;
+  border: 1px solid #ccc;
+  min-height: 400px;
+  max-height: 600px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  border: 1px solid #444;
+}
+
+/* Loading spinner styles */
+.status-loading {
+  text-align: center;
+  padding: 15px;
+  background: #2a2a2a;
+  border-radius: 5px;
+  margin: 10px 0;
+  border: 1px solid #444;
+}
+
+.status-loading .spinner {
+  margin: 0 auto 10px auto;
+  width: 120px;
+  height: 70px;
+}
+
+.status-loading .loading-message {
+  color: #fff;
+  font-size: 16px;
+}
+
+.description {
+  font-size: 13px;
+  opacity: 0.7;
+  margin: 5px 0 0 0;
+  line-height: 1.5;
+  max-width: 600px;
+}
+
+/* Tab navigation - Custom orange styling */
+.tab-nav {
+  margin: 20px 0;
+}
+
+.tab-nav ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.tab-nav li {
+  margin: 0;
+}
+
+.tab-nav button {
+  display: block;
+  padding: 10px 20px;
+  background: transparent;
+  border: 2px solid #F15A2C;
+  color: var(--text-color, #000);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  border-radius: 6px;
+  width: 270px;
+  text-align: center;
+  transition: all 0.2s ease;
+  margin-bottom: 8px;
+}
+
+.tab-nav button:hover {
+  background: rgba(241, 90, 44, 0.1);
+  color: #F15A2C;
+}
+
+.tab-nav button.active {
+  background: #F15A2C;
+  border: 2px solid #F15A2C;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.tab-nav i {
+  margin-right: 8px;
+}
+
+/* Tab content */
+.tab-content {
+  display: none;
+  margin: 20px 0;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+.tab-content h2 {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+  color: #F15A2C;
+}
+
+/* Standard button styling for consistency */
+.tab-content button,
+.tab-content input[type="submit"] {
+  padding: 8px 16px;
+  margin: 2px;
+  min-width: 120px;
+  font-size: 14px;
+}
+
+.tab-content button + button {
+  margin-left: 8px;
+}
+
+</style>
+
+<div class="tab-nav">
+  <ul>
+    <li><button onclick="showTab('auto-start')" id="tab-auto-start" class="active"><i class="fa fa-play"></i>Auto Start</button></li>
+    <li><button onclick="showTab('luks-headers')" id="tab-luks-headers"><i class="fa fa-shield"></i>LUKS Headers</button></li>
+    <li><button onclick="showTab('encryption-info')" id="tab-encryption-info"><i class="fa fa-info"></i>Encryption Info</button></li>
+    <li><button onclick="showTab('change-key')" id="tab-change-key"><i class="fa fa-key"></i>Change Encryption Key</button></li>
+  </ul>
+</div>
+
+<div id="content-auto-start" class="tab-content active">
+  <h2><i class="fa fa-play"></i> Auto Start</h2>
+  
+  <p>Configure automatic unlocking of encrypted drives using hardware-derived keys. Manual unlock is always possible using your original passphrase.</p>
+  
+  <!-- Loading indicator -->
+  <div id="smartStatusLoading" style="display: block; margin: 20px 0; padding: 10px; border-radius: 5px; border-left: 4px solid #F15A2C;">
+    <strong>Loading system status...</strong>
+  </div>
+  
+  <!-- Manual refresh option if smart detection fails -->
+  <div id="manualRefreshOption" style="display: none; margin: 20px 0; padding: 15px; border-radius: 5px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+    <h3 style="margin-top: 0; color: #ffa726;"><i class="fa fa-refresh"></i> Status Detection Issue</h3>
+    <p>The automatic status detection encountered an issue. You can manually refresh the detection or proceed with setup.</p>
+    
+    <dl>
+      <dt>&nbsp;</dt>
+      <dd>
+        <span><button type="button" onclick="loadSmartStatus()" style="background: #ffa726; color: white; padding: 10px 20px; margin-right: 10px;">Retry Detection</button></span>
+        <span><button type="button" onclick="showSetupForm()">Manual Setup</button></span>
+        <div class="description">If detection continues to fail, you can proceed with manual hardware key setup.</div>
+      </dd>
+    </dl>
+  </div>
+  
+  <!-- State: Array Stopped -->
+  <div id="stateArrayStopped" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+      <h3 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-info-circle"></i> Start Your Array First</h3>
+      <p>The Unraid array must be started before using this plugin. LUKS encrypted devices need to be accessible for the plugin to work properly.</p>
+      <p><strong>Why?</strong> The plugin needs to detect encrypted drives, verify hardware keys, and manage LUKS tokens - all of which require the array to be running.</p>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="goToStartArray()" style="background: #4dabf7; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Go to Main Tab → Start Array</button></span>
+          <div class="description">Start your array to enable LUKS device detection and key verification.</div>
+        </dd>
+      </dl>
+    </div>
+  </div>
+  
+  <!-- State: Setup Required -->
+  <div id="stateSetupRequired" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ff6b6b; background-color: rgba(255, 107, 107, 0.1);">
+      <h3 style="margin-top: 0; color: #ff6b6b;"><i class="fa fa-exclamation-triangle"></i> Hardware Keys Required</h3>
+      <p>Hardware keys required for auto-unlock.</p>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="showSetupForm()" style="background: #ff6b6b; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Generate Hardware Keys</button></span>
+          <div class="description">Generate hardware keys for auto-unlock functionality.</div>
+        </dd>
+      </dl>
+    </div>
+  </div>
+  
+  <!-- State: Ready but Disabled (Orange) -->
+  <div id="stateReadyDisabled" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+      <h3 style="margin-top: 0; color: #ffa726;"><i class="fa fa-key"></i> Hardware Keys Ready</h3>
+      <p>Hardware keys ready - auto-unlock disabled.</p>
+      <p><strong>Unlockable Devices:</strong> <span id="unlockableDevicesDisabled">Loading...</span></p>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="toggleAutoUnlock(true)" style="background: #ffa726; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Enable Auto-Unlock</button></span>
+          <div class="description">Enable automatic LUKS unlock at boot.</div>
+        </dd>
+      </dl>
+    </div>
+  </div>
+  
+  <!-- State: Ready and Enabled (Green) -->
+  <div id="stateReadyEnabled" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #51cf66; background-color: rgba(81, 207, 102, 0.1);">
+      <h3 style="margin-top: 0; color: #51cf66;"><i class="fa fa-check-circle"></i> Auto-Unlock Active</h3>
+      <p>Hardware keys will unlock devices at boot.</p>
+      <p><strong>Unlockable Devices:</strong> <span id="unlockableDevicesEnabled">Loading...</span></p>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="toggleAutoUnlock(false)" style="background: #51cf66; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Disable Auto-Unlock</button></span>
+          <div class="description">Disable automatic LUKS unlock at boot.</div>
+        </dd>
+      </dl>
+    </div>
+  </div>
+  
+  <!-- State: No Encrypted Disks -->
+  <div id="stateNoEncryptedDisks" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ff6b6b; background-color: rgba(255, 107, 107, 0.1);">
+      <h3 style="margin-top: 0; color: #ff6b6b;"><i class="fa fa-info-circle"></i> No Encrypted Disks Found</h3>
+      <p>This plugin requires LUKS encrypted arrays or pools to function.</p>
+      <p>Please encrypt your drives first using Unraid's disk encryption settings.</p>
+    </div>
+  </div>
+  
+  
+  <!-- Setup Form (hidden by default) -->
+  <div id="setupForm" style="display: none; margin-top: 20px;">
+    <h3>Hardware Key Setup</h3>
+    <p>Enter your existing LUKS encryption credentials to generate hardware keys:</p>
+    
+    <!-- Progress card for setup form feedback -->
+    <div id="setupFormMessage" style="display: none; margin: 20px 0; padding: 20px; border-radius: 8px; background-color: #ffc107; color: #000; font-size: 16px; font-weight: 500; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 2px solid #e0a800;">
+      <div id="setupFormSpinner" style="margin: 0 auto 15px auto; width: 120px; height: 70px;">
+        <!-- Official Unraid spinner will be inserted here by JavaScript -->
+      </div>
+      <div id="setupFormText">Generating hardware keys and downloading LUKS headers. Please wait...</div>
+    </div>
+    
+    <form id="autostartForm">
+      <dl>
+        <dt>Existing Encryption Key</dt>
+        <dd>
+          <select id="keyType_autostart" class="short" onchange="toggleKeyInput('autostart')">
+            <option value="passphrase" selected>Passphrase</option>
+            <option value="keyfile">Keyfile</option>
+          </select>
+        </dd>
+      </dl>
+      
+      <div id="passphraseSection_autostart">
+        <dl>
+          <dt>Enter Existing Passphrase</dt>
+          <dd>
+            <input type="password" id="passphrase_autostart" name="passphrase" class="short" maxlength="512" required>
+            <label><input type="checkbox" onchange="togglePassphraseVisibility('autostart')"> show passphrase</label>
+            <div class="description">Enter your original LUKS encryption passphrase.</div>
+          </dd>
+        </dl>
+      </div>
+      
+      <div id="keyfileSection_autostart" style="display: none;">
+        <dl>
+          <dt>Select Existing Keyfile</dt>
+          <dd>
+            <input type="file" id="keyfile_autostart" name="keyfile" onchange="validateKeyfileSize(this, 'autostart')">
+            <div class="description">Select your original LUKS encryption keyfile. Maximum size: 8 MiB. Any file type accepted.</div>
+          </dd>
+        </dl>
+        
+        <dl>
+          <dt>Backup ZIP Password</dt>
+          <dd>
+            <input type="password" id="zipPassword_autostart" class="short" maxlength="512">
+            <label style="margin-left: 10px;"><input type="checkbox" id="showZipPassword_autostart" onchange="toggleZipPasswordVisibility('autostart')"> Show password</label>
+            <div class="description">Password to encrypt the LUKS headers backup ZIP file. Required for keyfile authentication.</div>
+          </dd>
+        </dl>
+      </div>
+      
+      <dl>
+        <dt>Header Backup Location</dt>
+        <dd>
+          <select id="backupLocation" name="backupLocation" class="short" onchange="updateBackupLocationDescription()">
+            <option value="download" selected>Download to PC</option>
+            <option value="yes">Save to boot device</option>
+          </select>
+          <div class="description" id="backupLocationDescription">LUKS headers will always be backed up for safety. Files will be downloaded to your browser's download folder.</div>
+        </dd>
+      </dl>
+      
+      <dl>
+        <dt>Dry Run</dt>
+        <dd>
+          <select id="dryRun" name="dryRun" class="short">
+            <option value="no" selected>No - Apply changes</option>
+            <option value="yes">Yes - Simulate only</option>
+          </select>
+          <div class="description">Choose 'Yes' to preview actions without making changes, or 'No' to execute the setup.</div>
+        </dd>
+      </dl>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="console.log('DEBUG: Button clicked'); runAutoStartSetup();" style="background: #FF9800; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">SETUP AND ENABLE</button></span>
+          <span><button type="button" onclick="hideSetupForm()" style="margin-left: 10px; background: #6c757d; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">BACK</button></span>
+        </dd>
+      </dl>
+    </form>
+  </div>
+</div>
+
+<div id="content-luks-headers" class="tab-content">
+  <h2><i class="fa fa-shield"></i> LUKS Headers</h2>
+  
+  <!-- Array Stopped Message for Headers Tab -->
+  <div id="headersArrayStoppedMessage" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+      <h3 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-info-circle"></i> Start Your Array First</h3>
+      <p>The Unraid array must be started before using this plugin. LUKS encrypted devices need to be accessible for the plugin to work properly.</p>
+      <p><strong>Why?</strong> The plugin needs to detect encrypted drives, verify hardware keys, and manage LUKS tokens - all of which require the array to be running.</p>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="goToStartArray()" style="background: #4dabf7; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Go to Main Tab → Start Array</button></span>
+          <div class="description">Start your array to enable LUKS device detection and key verification.</div>
+        </dd>
+      </dl>
+    </div>
+  </div>
+  
+  <!-- No Encrypted Disks Message for Headers Tab -->
+  <div id="headersNoDisksMessage" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ff6b6b; background-color: rgba(255, 107, 107, 0.1);">
+      <h3 style="margin-top: 0; color: #ff6b6b;"><i class="fa fa-info-circle"></i> No Encrypted Disks Found</h3>
+      <p>This plugin requires LUKS encrypted arrays or pools to function.</p>
+      <p>Please encrypt your drives first using Unraid's disk encryption settings.</p>
+    </div>
+  </div>
+  
+  <!-- Normal Headers Content -->
+  <div id="headersNormalContent">
+    <p>Manage your LUKS headers with secure backup and restore operations. Header backups are essential for recovery if encryption headers become corrupted.</p>
+    
+    <!-- Step 1: Operation Selection -->
+    <div id="headersStep1" style="display: block;">
+      <h3><i class="fa fa-shield"></i> Step 1: Choose Operation</h3>
+      
+      <!-- Backup Headers Card -->
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+        <h4 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-shield"></i> Backup LUKS Headers</h4>
+        <p><strong>Create encrypted backups of all accessible LUKS headers</strong> for recovery purposes. Backups are encrypted with your authentication method for security.</p>
+        <p>For regular maintenance and to enable recovery from corrupted LUKS headers.</p>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span><button type="button" onclick="selectHeadersOperation('backup')" style="background: #4dabf7; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 200px; text-align: center;">Select Backup</button></span>
+          </dd>
+        </dl>
+      </div>
+      
+      <!-- Restore Headers Card -->
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+        <h4 style="margin-top: 0; color: #ffa726;"><i class="fa fa-wrench"></i> Restore LUKS Headers</h4>
+        <p><strong>Learn how to manually restore LUKS headers from backup files</strong>. This process requires array maintenance mode and careful attention to parity preservation.</p>
+        <p>For recovery from corrupted or damaged LUKS headers.</p>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span><button type="button" onclick="selectHeadersOperation('restore')" style="background: #ffa726; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 200px; text-align: center;">Select Restore</button></span>
+          </dd>
+        </dl>
+      </div>
+    </div>
+    
+    <!-- Step 2: Backup Location Selection -->
+    <div id="headersStep2" style="display: none;">
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+        <h3 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-download"></i> Step 2: Choose Backup Location</h3>
+        <p>Selected Operation: <strong>Backup Headers</strong></p>
+        <p>Choose where to store your encrypted LUKS header backups:</p>
+        
+        <!-- Download to PC Card -->
+        <div style="margin: 15px 0; padding: 15px; border-radius: 5px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.05);">
+          <h4 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-desktop"></i> Download to Computer</h4>
+          <p>Files downloaded via browser to your computer's download folder. Secure and portable for offline storage.</p>
+          <dl>
+            <dt>&nbsp;</dt>
+            <dd>
+              <span><button type="button" onclick="selectBackupLocation('download')" style="background: #4dabf7; color: white; padding: 10px 20px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; width: 230px; text-align: center;">Select PC Download</button></span>
+            </dd>
+          </dl>
+        </div>
+        
+        <!-- Save to Server Card -->
+        <div style="margin: 15px 0; padding: 15px; border-radius: 5px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.05);">
+          <h4 style="margin-top: 0; color: #ffa726;"><i class="fa fa-server"></i> Save to Boot Device</h4>
+          <p>Backup stored on server at <code>/boot/config/luksheaders/</code> for easy access and automated scripts.</p>
+          <dl>
+            <dt>&nbsp;</dt>
+            <dd>
+              <span><button type="button" onclick="selectBackupLocation('server')" style="background: #ffa726; color: white; padding: 10px 20px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; width: 230px; text-align: center;">Select Server Storage</button></span>
+            </dd>
+          </dl>
+        </div>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span><button type="button" onclick="goBackToHeadersStep(1)" style="background: #666; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Back</button></span>
+          </dd>
+        </dl>
+      </div>
+    </div>
+    
+    <!-- Step 3: Encryption Key Type Selection -->
+    <div id="headersStep3" style="display: none;">
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+        <h3 style="margin-top: 0; color: #ffa726;"><i class="fa fa-key"></i> Step 3: Choose Encryption Key Type</h3>
+        <p>Operation: <strong>Backup Headers</strong> | Location: <strong id="selectedBackupLocation">Download to PC</strong></p>
+        <p>Choose how you want to provide your LUKS encryption key:</p>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span style="margin-right: 15px;"><button type="button" onclick="selectHeadersKeyType('passphrase')" style="background: #ffa726; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 185px; text-align: center;">Use Passphrase</button></span>
+            <span><button type="button" onclick="selectHeadersKeyType('keyfile')" style="background: #ffa726; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 185px; text-align: center;">Use Keyfile</button></span>
+          </dd>
+        </dl>
+      </div>
+    </div>
+    
+    <!-- Step 4: Encryption Key Input -->
+    <div id="headersStep4" style="display: none;">
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+        <h3 style="margin-top: 0; color: #ffa726;"><i class="fa fa-lock"></i> Step 4: Enter Encryption Key</h3>
+        <p>Operation: <strong>Backup Headers</strong> | Location: <strong id="selectedBackupLocation2">Download to PC</strong> | Key Type: <strong id="selectedHeadersKeyType">Passphrase</strong></p>
+        
+        <!-- Passphrase Section -->
+        <div id="passphraseSection_headers">
+          <dl>
+            <dt>Enter Existing Passphrase</dt>
+            <dd>
+              <input type="password" id="passphrase_headers" name="passphrase" class="short" maxlength="512" required>
+              <label><input type="checkbox" onchange="togglePassphraseVisibility('headers')"> show passphrase</label>
+              <div class="description">Enter your LUKS encryption key. All devices this passphrase unlocks will be backed up.</div>
+            </dd>
+          </dl>
+        </div>
+        
+        <!-- Keyfile Section -->
+        <div id="keyfileSection_headers" style="display: none;">
+          <dl>
+            <dt>Select Existing Keyfile</dt>
+            <dd>
+              <input type="file" id="keyfile_headers" name="keyfile" onchange="validateKeyfileSize(this, 'headers')">
+              <div class="description">Select your LUKS encryption keyfile. All devices this keyfile unlocks will be backed up. Maximum size: 8 MiB. Any file type accepted.</div>
+            </dd>
+          </dl>
+          
+          <dl>
+            <dt>Backup ZIP Password</dt>
+            <dd>
+              <input type="password" id="zipPassword_headers" class="short" maxlength="512">
+              <label style="margin-left: 10px;"><input type="checkbox" id="showZipPassword_headers" onchange="toggleZipPasswordVisibility('headers')"> Show password</label>
+              <div class="description">Password to encrypt the LUKS headers backup ZIP file. Required for keyfile authentication.</div>
+            </dd>
+          </dl>
+        </div>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span><button type="button" onclick="proceedToHeadersBackup()" style="background: #ffa726; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 180px; text-align: center;">Start Backup</button></span>
+            <span style="margin-left: 10px;"><button type="button" onclick="goBackToHeadersStep(3)" style="background: #666; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 150px; text-align: center;">Back</button></span>
+          </dd>
+        </dl>
+      </div>
+    </div>
+    
+    <!-- Progress Spinner Card -->
+    <div id="headersProgress" style="display: none;">
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; background-color: #ffc107; text-align: center;">
+        <div id="headersSpinner" style="margin: 0 auto 15px auto; width: 120px; height: 70px;">
+          <!-- Official Unraid spinner will be inserted here by JavaScript -->
+        </div>
+        <div id="headersProgressText">Backing up LUKS headers...</div>
+      </div>
+    </div>
+    
+    <!-- Results Display Area -->
+    <div id="headersResults" style="display: none;">
+      <h3><i class="fa fa-check-circle"></i> Backup Complete</h3>
+      <div id="headersResultsContent">
+        <!-- Results will be displayed here -->
+      </div>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="resetHeadersWorkflow()" style="background: #4dabf7; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Start New Backup</button></span>
+        </dd>
+      </dl>
+    </div>
+    
+    <!-- Restore Instructions Display -->
+    <div id="headersRestoreInfo" style="display: none;">
+      <h3><i class="fa fa-info-circle"></i> Manual LUKS Header Restore Instructions</h3>
+      
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ff6b6b; background-color: rgba(255, 107, 107, 0.1);">
+        <h4 style="margin-top: 0; color: #ff6b6b;"><i class="fa fa-exclamation-triangle"></i> Important Prerequisites</h4>
+        <ul>
+          <li><strong>Array must be stopped</strong> - LUKS devices cannot be mounted during header restoration</li>
+          <li><strong>Maintenance mode required</strong> - Critical for parity preservation</li>
+          <li><strong>Backup files needed</strong> - Locate your header backup files (usually .img files)</li>
+          <li><strong>Expert knowledge recommended</strong> - Incorrect restoration can cause data loss</li>
+        </ul>
+      </div>
+      
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+        <h4 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-terminal"></i> Restoration Commands</h4>
+        <p><strong>Basic command structure:</strong></p>
+        <pre style="background-color: #f8f9fa; padding: 10px; border-radius: 5px; font-family: monospace;">cryptsetup luksHeaderRestore /dev/sdXY backup_file.img</pre>
+        
+        <p><strong>Example restoration process:</strong></p>
+        <pre style="background-color: #f8f9fa; padding: 10px; border-radius: 5px; font-family: monospace;"># 1. Identify the device needing restoration
+lsblk -f
+
+# 2. Restore the header (replace with your device and backup file)
+cryptsetup luksHeaderRestore /dev/md1p1 /boot/config/luksheaders/md1p1_backup.img
+
+# 3. Verify the restoration
+cryptsetup luksDump /dev/md1p1</pre>
+      </div>
+      
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+        <h4 style="margin-top: 0; color: #ffa726;"><i class="fa fa-shield"></i> Parity Considerations</h4>
+        <ul>
+          <li><strong>Parity preservation</strong> - Header restoration does not affect data blocks, parity remains valid</li>
+          <li><strong>No parity rebuild needed</strong> - Only headers are modified, not data content</li>
+          <li><strong>Test unlock first</strong> - Verify you can unlock the device before starting the array</li>
+        </ul>
+      </div>
+      
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #51cf66; background-color: rgba(81, 207, 102, 0.1);">
+        <h4 style="margin-top: 0; color: #51cf66;"><i class="fa fa-magic"></i> Future Automation</h4>
+        <p>Automated header restoration with guided recovery workflows is planned for a future version of this plugin. This will provide a safer, more user-friendly restoration process.</p>
+      </div>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="resetHeadersWorkflow()" style="background: #4dabf7; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Back to Operations</button></span>
+        </dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
+
+<div id="content-encryption-info" class="tab-content">
+  <h2><i class="fa fa-info"></i> Encryption Info</h2>
+  
+  <!-- Array Stopped Message for Encryption Info Tab -->
+  <div id="encinfoArrayStoppedMessage" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+      <h3 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-info-circle"></i> Start Your Array First</h3>
+      <p>The Unraid array must be started before using this plugin. LUKS encrypted devices need to be accessible for the plugin to work properly.</p>
+      <p><strong>Why?</strong> The plugin needs to detect encrypted drives, verify hardware keys, and manage LUKS tokens - all of which require the array to be running.</p>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span><button type="button" onclick="goToStartArray()" style="background: #4dabf7; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Go to Main Tab → Start Array</button></span>
+          <div class="description">Start your array to enable LUKS device detection and key verification.</div>
+        </dd>
+      </dl>
+    </div>
+  </div>
+  
+  <!-- No Encrypted Disks Message for Encryption Info Tab -->
+  <div id="encinfoNoDisksMessage" style="display: none;">
+    <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ff6b6b; background-color: rgba(255, 107, 107, 0.1);">
+      <h3 style="margin-top: 0; color: #ff6b6b;"><i class="fa fa-info-circle"></i> No Encrypted Disks Found</h3>
+      <p>This plugin requires LUKS encrypted arrays or pools to function.</p>
+      <p>Please encrypt your drives first using Unraid's disk encryption settings.</p>
+    </div>
+  </div>
+  
+  <!-- Normal Encryption Info Content -->
+  <div id="encinfoNormalContent">
+    <p>View detailed information about LUKS encryption on your server. This provides insight into encrypted drives, slot usage, and key configurations.</p>
+    
+    <!-- Step 1: Detail Level Selection -->
+    <div id="encinfoStep1" style="display: block;">
+      <h3><i class="fa fa-list"></i> Step 1: Choose Analysis Detail Level</h3>
+      
+      <!-- Simple Analysis Card -->
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+        <h4 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-list"></i> Simple Analysis</h4>
+        <p><strong>Basic drive list with encryption status</strong> - Quick overview of which devices are accessible with your encryption key.</p>
+        <p><strong>Best for:</strong> Quick status check and verification that your key works.</p>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span><button type="button" onclick="selectDetailLevel('simple')" style="background: #4dabf7; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 280px; text-align: center;">Select Simple</button></span>
+          </dd>
+        </dl>
+      </div>
+      
+      <!-- Detailed Analysis Card -->
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #51cf66; background-color: rgba(81, 207, 102, 0.1);">
+        <h4 style="margin-top: 0; color: #51cf66;"><i class="fa fa-th-list"></i> Detailed Analysis</h4>
+        <p><strong>Smart grouping with slot usage and metadata</strong> - Organized by device types (Array/Pool) with slot information and health indicators.</p>
+        <p><strong>Best for:</strong> Understanding encryption structure and slot management.</p>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span><button type="button" onclick="selectDetailLevel('detailed')" style="background: #51cf66; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 280px; text-align: center;">Select Detailed</button></span>
+          </dd>
+        </dl>
+      </div>
+      
+      <!-- Very Detailed Analysis Card -->
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+        <h4 style="margin-top: 0; color: #ffa726;"><i class="fa fa-search"></i> Very Detailed Analysis</h4>
+        <p><strong>Individual device breakdown with complete slot analysis</strong> - Full technical details per device including token information and hardware-derived keys.</p>
+        <p><strong>Best for:</strong> Troubleshooting and deep technical analysis.</p>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span><button type="button" onclick="selectDetailLevel('very_detailed')" style="background: #ffa726; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 280px; text-align: center;">Select Very Detailed</button></span>
+          </dd>
+        </dl>
+      </div>
+    </div>
+    
+    <!-- Step 2: Encryption Key Type Selection -->
+    <div id="encinfoStep2" style="display: none;">
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+        <h3 style="margin-top: 0; color: #ffa726;"><i class="fa fa-key"></i> Step 2: Choose Encryption Key Type</h3>
+        <p>Selected Analysis: <strong id="selectedDetailLevel">Simple</strong></p>
+        <p>Choose how you want to provide your LUKS encryption key:</p>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span style="margin-right: 15px;"><button type="button" onclick="selectKeyType('passphrase')" style="background: #ffa726; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 185px; text-align: center;">Use Passphrase</button></span>
+            <span><button type="button" onclick="selectKeyType('keyfile')" style="background: #ffa726; color: white; padding: 12px 20px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer; width: 185px; text-align: center;">Use Keyfile</button></span>
+          </dd>
+        </dl>
+      </div>
+    </div>
+    
+    <!-- Step 3: Encryption Key Input -->
+    <div id="encinfoStep3" style="display: none;">
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+        <h3 style="margin-top: 0; color: #ffa726;"><i class="fa fa-lock"></i> Step 3: Enter Encryption Key</h3>
+        <p>Analysis: <strong id="selectedDetailLevel2">Simple</strong> | Key Type: <strong id="selectedKeyType">Passphrase</strong></p>
+        
+        <!-- Passphrase Section -->
+        <div id="passphraseSection_encinfo">
+          <dl>
+            <dt>Enter Existing Passphrase</dt>
+            <dd>
+              <input type="password" id="passphrase_encinfo" name="passphrase" class="short" maxlength="512" required>
+              <label><input type="checkbox" onchange="togglePassphraseVisibility('encinfo')"> show passphrase</label>
+              <div class="description">Enter your LUKS encryption key to analyze encrypted drives and slots.</div>
+            </dd>
+          </dl>
+        </div>
+        
+        <!-- Keyfile Section -->
+        <div id="keyfileSection_encinfo" style="display: none;">
+          <dl>
+            <dt>Select Existing Keyfile</dt>
+            <dd>
+              <input type="file" id="keyfile_encinfo" name="keyfile" onchange="validateKeyfileSize(this, 'encinfo')">
+              <div class="description">Select your LUKS encryption keyfile to analyze encrypted drives and slots. Maximum size: 8 MiB. Any file type accepted.</div>
+            </dd>
+          </dl>
+        </div>
+        
+        <dl>
+          <dt>&nbsp;</dt>
+          <dd>
+            <span><button type="button" onclick="proceedToActions()" style="background: #ffa726; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Continue</button></span>
+            <span style="margin-left: 10px;"><button type="button" onclick="goBackToStep(2)" style="background: #666; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Back</button></span>
+          </dd>
+        </dl>
+      </div>
+    </div>
+    
+    <!-- Progress Spinner Card -->
+    <div id="encinfoProgress" style="display: none;">
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; background-color: #ffc107; text-align: center;">
+        <div id="encinfoSpinner" style="margin: 0 auto 15px auto; width: 120px; height: 70px;">
+          <!-- Official Unraid spinner will be inserted here by JavaScript -->
+        </div>
+        <div id="encinfoProgressText">Analyzing LUKS encryption...</div>
+      </div>
+    </div>
+    
+    <!-- Results Display Area -->
+    <div id="encinfoResults" style="display: none;">
+      <h3><i class="fa fa-chart-bar"></i> Encryption Analysis Results</h3>
+      <div id="encinfoResultsContent">
+        <!-- Parsed results will be displayed here -->
+      </div>
+      
+      <dl>
+        <dt>&nbsp;</dt>
+        <dd>
+          <span style="margin-right: 15px;"><button type="button" onclick="resetEncryptionInfoWorkflow()" style="background: #4dabf7; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Start New Analysis</button></span>
+          <span><button type="button" onclick="downloadEncryptionReport()" style="background: #51cf66; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Download Report</button></span>
+        </dd>
+      </dl>
+    </div>
+  </div>
+</div>
+
+<div id="content-change-key" class="tab-content">
+  <h2><i class="fa fa-key"></i> Change Encryption Key</h2>
+  
+  <p>Change your primary LUKS encryption authentication method using Unraid's built-in disk management interface. This is the recommended and safest method for changing your encryption key or switching between passphrases and keyfiles.</p>
+  
+  <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);">
+    <h3 style="margin-top: 0; color: #ffa726;"><i class="fa fa-key"></i> Change Primary Encryption Key</h3>
+    
+    <div style="margin: 15px 0; padding: 15px; border-radius: 5px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+      <strong style="color: #4dabf7;">Important:</strong> This process changes your <em>primary encryption authentication method</em> (passphrase or keyfile). Your hardware-derived auto-unlock key (managed by this plugin) operates independently in a separate slot and will continue to function normally regardless of changes to your primary encryption method.
+    </div>
+    
+    <h4>Instructions:</h4>
+    <ol>
+      <li>Click the button below to open Unraid's Disk Settings page and automatically scroll to the Encryption section</li>
+      <li>In the "Change encryption key" section:
+        <ul>
+          <li>Select your current encryption method in "Existing encryption key" (Passphrase or Keyfile)</li>
+          <li>Enter your current passphrase OR select your current keyfile</li>
+          <li>Choose your desired new encryption method in "Change encryption key" (Passphrase or Keyfile)</li>
+          <li><em>Note: You can switch between methods - change from passphrase to keyfile or vice versa</em></li>
+          <li>Enter your new passphrase OR select your new keyfile</li>
+          <li>Complete any additional fields (retype passphrase if applicable)</li>
+        </ul>
+      </li>
+      <li>Click "APPLY" to save the changes, then "DONE" to close the dialog</li>
+    </ol>
+    
+    <dl>
+      <dt>&nbsp;</dt>
+      <dd>
+        <span><button type="button" onclick="goToChangeEncryption()" style="background: #ffa726; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 6px; cursor: pointer;">Go to Disk Settings → Encryption</button></span>
+        <div class="description">Opens Unraid's Disk Settings and automatically scrolls to the encryption configuration section.</div>
+      </dd>
+    </dl>
+    
+    
+    <div style="margin-top: 15px; padding: 10px; border-radius: 5px; border-left: 4px solid #FF9800;">
+      <strong>Note:</strong> This feature uses Unraid's native encryption key management system. If the button doesn't work, manually navigate to Settings → Disk Settings in the main Unraid interface.
+    </div>
+  </div>
+</div>
+
+<script>
+  
+  // Make CSRF token available to JavaScript
+  var csrf_token = '<?=$csrf_token?>';
+  
+  // Tab functionality
+  function showTab(tabId) {
+    console.log('DEBUG: Switching to tab:', tabId);
+    
+    // Hide all tab contents
+    const allContents = document.querySelectorAll('.tab-content');
+    allContents.forEach(content => {
+      content.classList.remove('active');
+    });
+    
+    // Remove active class from all tab buttons
+    const allButtons = document.querySelectorAll('.tab-nav button');
+    allButtons.forEach(button => {
+      button.classList.remove('active');
+    });
+    
+    // Show selected tab content
+    const selectedContent = document.getElementById('content-' + tabId);
+    if (selectedContent) {
+      selectedContent.classList.add('active');
+      console.log('DEBUG: Activated content for tab:', tabId);
+    } else {
+      console.error('DEBUG: Could not find content for tab:', tabId);
+    }
+    
+    // Activate selected tab button
+    const selectedButton = document.getElementById('tab-' + tabId);
+    if (selectedButton) {
+      selectedButton.classList.add('active');
+      console.log('DEBUG: Activated button for tab:', tabId);
+    } else {
+      console.error('DEBUG: Could not find button for tab:', tabId);
+    }
+    
+    // Reset each tab's workflow to its initial state when clicked
+    switch(tabId) {
+      case 'auto-start':
+        console.log('DEBUG: Resetting auto-start tab to initial state');
+        loadSmartStatus(); // Refresh auto-unlock status and reset to initial state cards
+        break;
+      case 'luks-headers':
+        console.log('DEBUG: Resetting LUKS headers workflow to Step 1');
+        resetHeadersWorkflow();
+        break;
+      case 'encryption-info':
+        console.log('DEBUG: Resetting encryption info workflow to Step 1');
+        resetEncryptionInfoWorkflow();
+        break;
+    }
+    
+    // Check encrypted disks availability for this tab
+    updateTabBasedOnEncryptedDisks(tabId);
+  }
+  
+  // Function to check encrypted disks availability and show/hide content accordingly
+  function updateTabBasedOnEncryptedDisks(tabId) {
+    console.log('DEBUG: updateTabBasedOnEncryptedDisks called for tab:', tabId);
+    
+    // Skip auto-start tab as it has its own logic
+    if (tabId === 'auto-start') {
+      console.log('DEBUG: Skipping auto-start tab, has its own logic');
+      return;
+    }
+    
+    // Get system state to check for encrypted disks
+    fetch('/plugins/encrypted-drive-manager/scripts/get_smart_status.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: 'csrf_token=' + encodeURIComponent(csrf_token)
+    })
+    .then(response => {
+      console.log('DEBUG: Response status:', response.status);
+      console.log('DEBUG: Response headers:', response.headers);
+      return response.text().then(text => {
+        console.log('DEBUG: Raw response text:', text);
+        try {
+          return JSON.parse(text);
+        } catch (e) {
+          console.error('DEBUG: JSON parse error:', e);
+          console.error('DEBUG: Response was:', text);
+          throw e;
+        }
+      });
+    })
+    .then(data => {
+      const systemState = data.system_state;
+      const arrayRunning = systemState !== 'array_stopped';
+      const hasEncryptedDisks = systemState !== 'no_encrypted_disks';
+      
+      console.log('DEBUG: API response for tab', tabId, ':', data);
+      console.log('DEBUG: System state:', systemState);
+      console.log('DEBUG: Array running:', arrayRunning);
+      console.log('DEBUG: Has encrypted disks:', hasEncryptedDisks);
+      
+      // Update each tab based on system state
+      if (tabId === 'luks-headers') {
+        console.log('DEBUG: Updating LUKS Headers tab');
+        const arrayStoppedMsg = document.getElementById('headersArrayStoppedMessage');
+        const noDisksMsg = document.getElementById('headersNoDisksMessage');
+        const normalContent = document.getElementById('headersNormalContent');
+        const form = document.getElementById('headersForm');
+        
+        // Hide all messages first
+        if (arrayStoppedMsg) arrayStoppedMsg.style.display = 'none';
+        if (noDisksMsg) noDisksMsg.style.display = 'none';
+        if (normalContent) normalContent.style.display = 'none';
+        if (form) form.style.display = 'none';
+        
+        // Show appropriate content based on state
+        if (!arrayRunning) {
+          if (arrayStoppedMsg) arrayStoppedMsg.style.display = 'block';
+        } else if (!hasEncryptedDisks) {
+          if (noDisksMsg) noDisksMsg.style.display = 'block';
+        } else {
+          if (normalContent) normalContent.style.display = 'block';
+          if (form) form.style.display = 'block';
+        }
+        
+        console.log('DEBUG: Headers elements found:', !!arrayStoppedMsg, !!noDisksMsg, !!normalContent, !!form);
+        
+      } else if (tabId === 'encryption-info') {
+        console.log('DEBUG: Updating Encryption Info tab');
+        const arrayStoppedMsg = document.getElementById('encinfoArrayStoppedMessage');
+        const noDisksMsg = document.getElementById('encinfoNoDisksMessage');
+        const normalContent = document.getElementById('encinfoNormalContent');
+        const form = document.getElementById('encinfoForm');
+        
+        // Hide all messages first
+        if (arrayStoppedMsg) arrayStoppedMsg.style.display = 'none';
+        if (noDisksMsg) noDisksMsg.style.display = 'none';
+        if (normalContent) normalContent.style.display = 'none';
+        if (form) form.style.display = 'none';
+        
+        // Show appropriate content based on state
+        if (!arrayRunning) {
+          if (arrayStoppedMsg) arrayStoppedMsg.style.display = 'block';
+        } else if (!hasEncryptedDisks) {
+          if (noDisksMsg) noDisksMsg.style.display = 'block';
+        } else {
+          if (normalContent) normalContent.style.display = 'block';
+          if (form) form.style.display = 'block';
+        }
+        
+        console.log('DEBUG: Encinfo elements found:', !!arrayStoppedMsg, !!noDisksMsg, !!normalContent, !!form);
+        
+      } else if (tabId === 'change-key') {
+        console.log('DEBUG: Change Encryption Key tab selected - static content, no state management needed');
+      }
+    })
+    .catch(error => {
+      console.error('DEBUG: Error checking encrypted disks:', error);
+      // On error, default to showing normal content
+    });
+  }
+  
+  // Unified status output functions
+  function updateStatus(message) {
+    const statusOutput = document.getElementById('statusOutput');
+    statusOutput.textContent += message + '\n';
+    statusOutput.scrollTop = statusOutput.scrollHeight;
+    
+    // Auto-switch to status tab
+    showTab('status');
+  }
+
+  function setStatus(message) {
+    // Hide loading spinner when we get output
+    hideStatusLoading();
+    
+    const statusOutput = document.getElementById('statusOutput');
+    statusOutput.textContent = message + '\n';
+    statusOutput.scrollTop = statusOutput.scrollHeight;
+    
+    // Auto-switch to status tab
+    showTab('status');
+  }
+
+  function clearStatus() {
+    hideStatusLoading();
+    document.getElementById('statusOutput').textContent = 'Output cleared.\n';
+  }
+
+  // Clear status silently without any message (for operation starts)
+  function clearStatusSilently() {
+    hideStatusLoading();
+    const statusOutput = document.getElementById('statusOutput');
+    if (statusOutput) {
+      statusOutput.textContent = '';
+    }
+  }
+
+  // Loading spinner control functions
+  function showStatusLoading(message) {
+    console.log('DEBUG: showStatusLoading called with message:', message);
+    const loadingDiv = document.getElementById('status-loading');
+    const loadingMessage = document.getElementById('loading-message');
+    const spinnerDiv = loadingDiv.querySelector('.spinner');
+    
+    console.log('DEBUG: loadingDiv found:', !!loadingDiv);
+    console.log('DEBUG: loadingMessage found:', !!loadingMessage);
+    console.log('DEBUG: spinnerDiv found:', !!spinnerDiv);
+    
+    if (loadingDiv && loadingMessage && spinnerDiv) {
+      loadingMessage.textContent = message || 'Processing...';
+      
+      // Use the official Unraid spinner animation
+      if (typeof unraid_logo !== 'undefined') {
+        spinnerDiv.innerHTML = unraid_logo;
+      } else {
+        // Fallback: try to use the same method as the main Unraid interface
+        spinnerDiv.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 133.52 76.97" class="unraid_mark"><defs><linearGradient id="unraid_logo_plugin" x1="23.76" y1="81.49" x2="109.76" y2="-4.51" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e32929"/><stop offset="1" stop-color="#ff8d30"/></linearGradient></defs><path d="m70,19.24zm57,0l6.54,0l0,38.49l-6.54,0l0,-38.49z" fill="url(#unraid_logo_plugin)" class="unraid_mark_9"/><path d="m70,19.24zm47.65,11.9l-6.55,0l0,-23.79l6.55,0l0,23.79z" fill="url(#unraid_logo_plugin)" class="unraid_mark_8"/><path d="m70,19.24zm31.77,-4.54l-6.54,0l0,-14.7l6.54,0l0,14.7z" fill="url(#unraid_logo_plugin)" class="unraid_mark_7"/><path d="m70,19.24zm15.9,11.9l-6.54,0l0,-23.79l6.54,0l0,23.79z" fill="url(#unraid_logo_plugin)" class="unraid_mark_6"/><path d="m63.49,19.24l6.51,0l0,38.49l-6.51,0l0,-38.49z" fill="url(#unraid_logo_plugin)" class="unraid_mark_5"/><path d="m70,19.24zm-22.38,26.6l6.54,0l0,23.78l-6.54,0l0,-23.78z" fill="url(#unraid_logo_plugin)" class="unraid_mark_4"/><path d="m70,19.24zm-38.26,43.03l6.55,0l0,14.73l-6.55,0l0,-14.73z" fill="url(#unraid_logo_plugin)" class="unraid_mark_3"/><path d="m70,19.24zm-54.13,26.6l6.54,0l0,23.78l-6.54,0l0,-23.78z" fill="url(#unraid_logo_plugin)" class="unraid_mark_2"/><path d="m70,19.24zm-63.46,38.49l-6.54,0l0,-38.49l6.54,0l0,38.49z" fill="url(#unraid_logo_plugin)" class="unraid_mark_1"/></svg>';
+      }
+      
+      loadingDiv.style.display = 'block';
+      console.log('DEBUG: Loading spinner should now be visible with official animation');
+      
+      // Auto-scroll to status section
+      showTab('status');
+    } else {
+      console.log('DEBUG: Missing elements - loadingDiv:', !!loadingDiv, 'loadingMessage:', !!loadingMessage, 'spinnerDiv:', !!spinnerDiv);
+    }
+  }
+
+  function hideStatusLoading() {
+    const loadingDiv = document.getElementById('status-loading');
+    if (loadingDiv) {
+      loadingDiv.style.display = 'none';
+    }
+  }
+
+  // Show spinner in setup form message area using Unraid's built-in functionality
+  function showInCardSpinner() {
+    const setupForm = document.getElementById('setupForm');
+    if (setupForm && setupForm.style.display !== 'none') {
+      const setupSpinner = document.getElementById('setupFormSpinner');
+      if (setupSpinner) {
+        // Use the exact same logic as showStatusLoading() but for our in-card spinner
+        setupSpinner.className = 'spinner'; // Add the official spinner class
+        
+        // Use Unraid's built-in spinner mechanism
+        if (typeof unraid_logo !== 'undefined') {
+          setupSpinner.innerHTML = unraid_logo;
+        } else {
+          // Use the same fallback as the official showStatusLoading function
+          setupSpinner.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 133.52 76.97" class="unraid_mark"><defs><linearGradient id="unraid_logo_plugin" x1="23.76" y1="81.49" x2="109.76" y2="-4.51" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e32929"/><stop offset="1" stop-color="#ff8d30"/></linearGradient></defs><path d="m70,19.24zm57,0l6.54,0l0,38.49l-6.54,0l0,-38.49z" fill="url(#unraid_logo_plugin)" class="unraid_mark_9"/><path d="m70,19.24zm47.65,11.9l-6.55,0l0,-23.79l6.55,0l0,23.79z" fill="url(#unraid_logo_plugin)" class="unraid_mark_8"/><path d="m70,19.24zm31.77,-4.54l-6.54,0l0,-14.7l6.54,0l0,14.7z" fill="url(#unraid_logo_plugin)" class="unraid_mark_7"/><path d="m70,19.24zm15.9,11.9l-6.54,0l0,-23.79l6.54,0l0,23.79z" fill="url(#unraid_logo_plugin)" class="unraid_mark_6"/><path d="m63.49,19.24l6.51,0l0,38.49l-6.51,0l0,-38.49z" fill="url(#unraid_logo_plugin)" class="unraid_mark_5"/><path d="m70,19.24zm-22.38,26.6l6.54,0l0,23.78l-6.54,0l0,-23.78z" fill="url(#unraid_logo_plugin)" class="unraid_mark_4"/><path d="m70,19.24zm-38.26,43.03l6.55,0l0,14.73l-6.55,0l0,-14.73z" fill="url(#unraid_logo_plugin)" class="unraid_mark_3"/><path d="m70,19.24zm-54.13,26.6l6.54,0l0,23.78l-6.54,0l0,-23.78z" fill="url(#unraid_logo_plugin)" class="unraid_mark_2"/><path d="m70,19.24zm-63.46,38.49l-6.54,0l0,-38.49l6.54,0l0,38.49z" fill="url(#unraid_logo_plugin)" class="unraid_mark_1"/></svg>';
+        }
+        setupSpinner.style.display = 'block';
+      }
+    }
+  }
+
+  // Hide spinner in setup form message area  
+  function hideInCardSpinner() {
+    const setupForm = document.getElementById('setupForm');
+    if (setupForm && setupForm.style.display !== 'none') {
+      const setupSpinner = document.getElementById('setupFormSpinner');
+      if (setupSpinner) {
+        setupSpinner.style.display = 'none';
+        setupSpinner.innerHTML = ''; // Clear the spinner content
+        setupSpinner.className = ''; // Remove the spinner class
+      }
+    }
+  }
+
+  // Show temporary message in current Auto Start state card
+  function showInCardMessage(message, duration = 3000) {
+    console.log('DEBUG: showInCardMessage called with:', message, 'duration:', duration);
+    
+    // Check if setup form is visible first
+    const setupForm = document.getElementById('setupForm');
+    if (setupForm && setupForm.style.display !== 'none') {
+      console.log('DEBUG: Setup form visible, using setup form message area');
+      const setupMessageArea = document.getElementById('setupFormMessage');
+      const setupTextArea = document.getElementById('setupFormText');
+      if (setupMessageArea && setupTextArea) {
+        setupTextArea.textContent = message;
+        setupMessageArea.style.display = 'block';
+        
+        // Auto-hide after specified time
+        if (duration > 0) {
+          setTimeout(function() {
+            setupMessageArea.style.display = 'none';
+          }, duration);
+        }
+        return;
+      }
+    }
+    
+    // Find the currently visible state card
+    const stateCards = [
+      document.getElementById('stateArrayStopped'),
+      document.getElementById('stateSetupRequired'), 
+      document.getElementById('stateReadyDisabled'),
+      document.getElementById('stateReadyEnabled')
+    ];
+    
+    let currentCard = null;
+    for (const card of stateCards) {
+      if (card && card.style.display !== 'none') {
+        currentCard = card;
+        break;
+      }
+    }
+    
+    if (!currentCard) {
+      console.log('DEBUG: No visible state card found, falling back to status tab');
+      updateStatus(message);
+      return;
+    }
+    
+    // Create or update in-card message area
+    let messageArea = currentCard.querySelector('.in-card-message');
+    if (!messageArea) {
+      messageArea = document.createElement('div');
+      messageArea.className = 'in-card-message';
+      messageArea.style.cssText = 'margin-top: 10px; padding: 10px; border-radius: 4px; background-color: rgba(255, 193, 7, 0.1); border-left: 4px solid #ffc107; font-size: 14px;';
+      currentCard.insertBefore(messageArea, currentCard.firstChild.nextSibling);
+    }
+    
+    messageArea.textContent = message;
+    messageArea.style.display = 'block';
+    
+    // Auto-hide after duration (unless duration is 0)
+    if (duration > 0) {
+      setTimeout(() => {
+        if (messageArea && messageArea.parentNode) {
+          messageArea.style.display = 'none';
+        }
+      }, duration);
+    }
+  }
+
+  function runAutoStartSetup() {
+    // Clear any previous status output
+    clearStatusSilently();
+    
+    console.log('DEBUG: runAutoStartSetup called');
+    
+    // Show progress in current Auto Start tab instead of redirecting to status
+    showInCardMessage('Starting auto-unlock setup...', 0); // 0 = don't auto-hide
+    
+    // Validate encryption key input using shared component
+    const validationError = validateEncryptionKeyInput('autostart');
+    console.log('DEBUG: Validation result:', validationError);
+    if (validationError) {
+      showInCardMessage('Error: ' + validationError, 5000);
+      return;
+    }
+    
+    const backupLocation = document.getElementById('backupLocation').value;
+    const dryRun = document.getElementById('dryRun').value;
+
+    // Show the prominent progress card with spinner
+    showInCardMessage('Generating hardware keys and downloading LUKS headers. Please wait...', 0);
+    showInCardSpinner();
+    
+    console.log('DEBUG: Status set, preparing form data');
+
+    // Convert backupLocation to the format expected by the backend
+    const backupHeaders = backupLocation === 'download' ? 'download' : 'yes';
+
+    // Prepare data using Unraid's pattern (no FormData, use base64 for files)
+    const keyType = document.getElementById('keyType_autostart').value;
+    console.log('DEBUG: keyType:', keyType);
+    
+    const postData = {
+      keyType: keyType,
+      backupHeaders: backupHeaders,
+      dryRun: dryRun
+    };
+    
+    if (keyType === 'passphrase') {
+      const passphrase = document.getElementById('passphrase_autostart').value;
+      console.log('DEBUG: Using passphrase, length:', passphrase.length);
+      postData.passphrase = passphrase;
+    } else {
+      const keyfileInput = document.getElementById('keyfile_autostart');
+      console.log('DEBUG: Using keyfile, files:', keyfileInput.files);
+      if (keyfileInput.files && keyfileInput.files[0]) {
+        console.log('DEBUG: File selected:', keyfileInput.files[0].name, 'Size:', keyfileInput.files[0].size);
+        
+        // Add ZIP password for keyfile users
+        const zipPassword = document.getElementById('zipPassword_autostart').value;
+        postData.zipPassword = zipPassword;
+        console.log('DEBUG: ZIP password included for keyfile user');
+        
+        // Convert file to base64 (Unraid pattern)
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const base64Data = e.target.result; // This includes 'data:application/octet-stream;base64,'
+          postData.keyfileData = base64Data;
+          
+          // Add CSRF token
+          console.log('DEBUG: Using CSRF token:', csrf_token);
+          if (csrf_token) {
+            postData.csrf_token = csrf_token;
+          }
+          
+          console.log('DEBUG: Starting AJAX request with base64 keyfile');
+          makeAjaxRequest(postData, 'auto-start');
+        };
+        reader.readAsDataURL(keyfileInput.files[0]);
+        return; // Exit here, the request will be made in the reader callback
+      } else {
+        console.log('DEBUG: No file selected!');
+        showInCardMessage('Error: No keyfile selected', 5000);
+        return;
+      }
+    }
+    
+    // Add CSRF token for passphrase requests
+    console.log('DEBUG: Using CSRF token:', csrf_token);
+    if (csrf_token) {
+      postData.csrf_token = csrf_token;
+    } else {
+      console.log('WARNING: No CSRF token available');
+    }
+
+    console.log('DEBUG: Starting AJAX request to /plugins/encrypted-drive-manager/scripts/run_luks_script.php');
+    makeAjaxRequest(postData, 'auto-start');
+  }
+  
+  function makeAjaxRequest(postData, context = 'default') {
+    $.ajax({
+      url: '/plugins/encrypted-drive-manager/scripts/run_luks_script.php',
+      type: 'POST',
+      data: postData,
+      beforeSend: function(xhr) {
+        console.log('DEBUG: AJAX request starting...');
+      },
+      success: function(data) {
+        console.log('DEBUG: AJAX success, response length:', data.length);
+        console.log('DEBUG: Response data:', data);
+        console.log('DEBUG: Context:', context);
+        
+        // Handle response based on context
+        if (context === 'auto-start') {
+          // For Auto Start operations, stay on Auto Start page with in-card messaging
+          const isDryRun = document.getElementById('dryRun').value === 'yes';
+          
+          console.log('DEBUG: Auto-start response analysis:', {
+            hasCheckmark: data.includes('✅'),
+            hasSUCCESS: data.includes('SUCCESS'),
+            hasCompletedSuccessfully: data.includes('completed successfully'),
+            hasSetupCompleted: data.includes('Setup completed'),
+            hasError: data.includes('Error:'),
+            hasFailed: data.includes('Failed:'),
+            dataLength: data.length,
+            dataPreview: data.substring(0, 200)
+          });
+          
+          if (data.includes('✅') || data.includes('SUCCESS') || data.includes('completed successfully') || data.includes('Setup completed')) {
+            console.log('DEBUG: Success detected, transitioning to ready state');
+            hideInCardSpinner();
+            showInCardMessage('Setup completed successfully! Transitioning to next state...', 3000);
+            
+            // Hide setup form and refresh status after a short delay for smooth transition
+            setTimeout(function() {
+              hideSetupForm();
+              loadSmartStatus(); // This will transition to the appropriate state card
+            }, 2000);
+          } else if (data.includes('Invalid passphrase')) {
+            console.log('DEBUG: Authentication error detected - Invalid passphrase');
+            // Show specific passphrase error message
+            hideInCardSpinner();
+            showInCardMessage('❌ Invalid passphrase - Please verify your encryption passphrase is correct and try again.', 10000);
+          } else if (data.includes('Invalid keyfile')) {
+            console.log('DEBUG: Authentication error detected - Invalid keyfile');
+            // Show specific keyfile error message
+            hideInCardSpinner();
+            showInCardMessage('❌ Invalid keyfile - Please verify you\'ve selected the correct keyfile and try again.', 10000);
+          } else if (data.includes('Error:') || data.includes('Failed:')) {
+            console.log('DEBUG: Error detected');
+            // Show error in Auto Start card, don't redirect to Status tab
+            hideInCardSpinner();
+            const errorText = data.replace(/^.*Error:\s*/i, '').split('\n')[0]; // Extract first error line
+            showInCardMessage('Error: ' + errorText, 8000); // Longer timeout for errors
+          } else {
+            // Check if any hardware key operations actually succeeded
+            const hasHardwareKeySuccess = data.includes('Hardware key refreshed for current system') || 
+                                        data.includes('Current hardware key already works') ||
+                                        data.includes('Hardware keys are ready for use');
+            
+            hideInCardSpinner();
+            
+            if (!hasHardwareKeySuccess) {
+              // No hardware key operations succeeded - likely authentication failure
+              const keyType = document.getElementById('keyType_autostart').value;
+              if (keyType === 'passphrase') {
+                showInCardMessage('❌ Invalid passphrase - Please verify your encryption passphrase is correct and try again.', 10000);
+              } else {
+                showInCardMessage('❌ Invalid keyfile - Please verify you\'ve selected the correct keyfile and try again.', 10000);
+              }
+            } else {
+              // Hardware key operations succeeded - normal success flow
+              showInCardMessage('Setup completed successfully! Transitioning to next state...', 3000);
+              
+              // Hide setup form and refresh status for state transition  
+              setTimeout(function() {
+                hideSetupForm();
+                loadSmartStatus();
+              }, 2000);
+            }
+          }
+        } else {
+          // For other tabs (headers, encryption-info), use original behavior
+          showTab('status');
+          setStatus(data);
+        }
+        
+        // Use shared download detection function with context awareness
+        const finalBackupLocation = document.getElementById('backupLocation').value;
+        const finalDryRun = document.getElementById('dryRun').value;
+        handleDownloadDetection(data, finalBackupLocation, finalDryRun, context);
+      },
+      error: function(xhr, status, error) {
+        console.log('DEBUG: AJAX error - Status:', status, 'Error:', error);
+        console.log('DEBUG: XHR object:', xhr);
+        
+        const errorMessage = 'Error: AJAX failed - Status: ' + status + ', Error: ' + error + '\nCheck browser console for more details.';
+        
+        if (context === 'auto-start') {
+          // Stay on Auto Start page, show network error in card
+          hideInCardSpinner();
+          showInCardMessage('Network error: ' + status + ' - ' + error + '. Check browser console for details.', 8000);
+        } else {
+          // For other tabs, use original behavior
+          showTab('status');
+          setStatus(errorMessage);
+        }
+      }
+    });
+  }
+
+  function downloadBackupFile(filename, context = 'default') {
+    // Create direct download link - file is accessible via plugin downloads directory
+    const downloadUrl = '/plugins/encrypted-drive-manager/downloads/' + filename;
+    
+    // Create a temporary anchor element to trigger download
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = filename;
+    link.style.display = 'none';
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Context-aware messaging - don't redirect to Status tab for Auto Start operations
+    if (context === 'auto-start') {
+      console.log('DEBUG: Download initiated for Auto Start context, not redirecting to Status tab');
+      // Download is silent for Auto Start operations, continue with current workflow
+    } else {
+      // For other contexts (headers, encryption-info), use original behavior
+      updateStatus('\nBackup file download initiated. Check your browser\'s download folder.');
+    }
+    
+    // Clean up the temporary file after a delay
+    setTimeout(function() {
+      fetch('/plugins/encrypted-drive-manager/scripts/cleanup_download.php', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'filename=' + encodeURIComponent(filename)
+      });
+    }, 5000); // 5 second delay to ensure download completes
+  }
+
+  // Event management functions for new plugin architecture
+  function refreshAutoUnlockStatus() {
+    console.log('DEBUG: refreshAutoUnlockStatus called');
+    
+    // Show status in the Auto Start tab itself
+    showStatusInTab('Checking auto-unlock status...');
+    
+    const postData = { action: 'status' };
+    if (csrf_token) {
+      postData.csrf_token = csrf_token;
+    }
+    
+    $.ajax({
+      url: '/plugins/encrypted-drive-manager/scripts/run_event_script.php',
+      type: 'POST',
+      data: postData,
+      success: function(data) {
+        console.log('DEBUG: Status check response:', data);
+        
+        // Parse the response to extract status
+        let statusText = "Unknown";
+        if (data.includes('enabled')) {
+          statusText = "Enabled ✅";
+        } else if (data.includes('disabled')) {
+          statusText = "Disabled ❌";
+        }
+        
+        // Update the status display
+        document.getElementById('autoUnlockStatus').textContent = statusText;
+        
+        // Show full output in the status area
+        showStatusInTab(data);
+      },
+      error: function() {
+        document.getElementById('autoUnlockStatus').textContent = "Error checking status";
+        showStatusInTab('Error: Failed to check auto-unlock status');
+      }
+    });
+  }
+  
+  function enableAutoUnlock() {
+    console.log('DEBUG: enableAutoUnlock called');
+    
+    showStatusInTab('Enabling auto-unlock...');
+    
+    const postData = { action: 'enable' };
+    if (csrf_token) {
+      postData.csrf_token = csrf_token;
+    }
+    
+    $.ajax({
+      url: '/plugins/encrypted-drive-manager/scripts/run_event_script.php',
+      type: 'POST',
+      data: postData,
+      success: function(data) {
+        console.log('DEBUG: Enable response:', data);
+        showStatusInTab(data);
+        
+        // Update status display after successful enable
+        if (data.includes('enabled successfully')) {
+          document.getElementById('autoUnlockStatus').textContent = "Enabled ✅";
+        }
+      },
+      error: function() {
+        showStatusInTab('Error: Failed to enable auto-unlock');
+      }
+    });
+  }
+  
+  function disableAutoUnlock() {
+    console.log('DEBUG: disableAutoUnlock called');
+    
+    showStatusInTab('Disabling auto-unlock...');
+    
+    const postData = { action: 'disable' };
+    if (csrf_token) {
+      postData.csrf_token = csrf_token;
+    }
+    
+    $.ajax({
+      url: '/plugins/encrypted-drive-manager/scripts/run_event_script.php',
+      type: 'POST',
+      data: postData,
+      success: function(data) {
+        console.log('DEBUG: Disable response:', data);
+        showStatusInTab(data);
+        
+        // Update status display after successful disable
+        if (data.includes('disabled successfully')) {
+          document.getElementById('autoUnlockStatus').textContent = "Disabled ❌";
+        }
+      },
+      error: function() {
+        showStatusInTab('Error: Failed to disable auto-unlock');
+      }
+    });
+  }
+  
+  // Helper function to show status within the current tab instead of switching to status tab
+  function showStatusInTab(message) {
+    let statusOutput = document.getElementById('statusOutput');
+    
+    // Update the status content (statusOutput is always visible in Status tab)
+    statusOutput.textContent = message;
+    statusOutput.scrollTop = statusOutput.scrollHeight;
+    
+    // Also show in Status tab for full output
+    showTab('status');
+  }
+
+  function runHeadersBackup() {
+    // Clear any previous status output
+    clearStatusSilently();
+    
+    // Validate encryption key input using shared component
+    const validationError = validateEncryptionKeyInput('headers');
+    if (validationError) {
+      setStatus('Error: ' + validationError);
+      return;
+    }
+
+    const backupLocation = document.getElementById('headersBackupLocation').value;
+
+    // Auto-scroll to Status section to show operation progress
+    showTab('status');
+    showStatusLoading('Backing up LUKS headers...');
+    updateStatus('Starting LUKS headers backup operation...\nExecuting LUKS headers backup script, please wait...');
+
+    // Use the same backend but with headers-only flags
+    const backupMode = backupLocation === 'download' ? 'download' : 'yes';
+    const keyType = document.getElementById('keyType_headers').value;
+    
+    // Prepare data using the same pattern as Auto Start (which works)
+    const postData = {
+      keyType: keyType,
+      backupHeaders: backupMode,
+      dryRun: 'no', // Headers backup is always live
+      headersOnly: 'true' // Flag to indicate this is headers-only operation
+    };
+    
+    if (keyType === 'passphrase') {
+      const passphrase = document.getElementById('passphrase_headers').value;
+      postData.passphrase = passphrase;
+      
+      // Add CSRF token
+      if (csrf_token) {
+        postData.csrf_token = csrf_token;
+      }
+      
+      // Make request directly for passphrase
+      makeHeadersAjaxRequest(postData, backupLocation);
+    } else {
+      const keyfileInput = document.getElementById('keyfile_headers');
+      if (keyfileInput.files && keyfileInput.files[0]) {
+        // Add ZIP password for keyfile users
+        const zipPassword = document.getElementById('zipPassword_headers').value;
+        postData.zipPassword = zipPassword;
+        console.log('DEBUG: ZIP password included for headers keyfile user');
+        
+        // Convert file to base64 (same pattern as Auto Start)
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const base64Data = e.target.result;
+          postData.keyfileData = base64Data;
+          
+          // Add CSRF token
+          if (csrf_token) {
+            postData.csrf_token = csrf_token;
+          }
+          
+          makeHeadersAjaxRequest(postData, backupLocation);
+        };
+        reader.readAsDataURL(keyfileInput.files[0]);
+        return;
+      } else {
+        setStatus('Error: No keyfile selected');
+        return;
+      }
+    }
+  }
+  
+  function makeHeadersAjaxRequest(postData, backupLocation) {
+    $.ajax({
+      url: '/plugins/encrypted-drive-manager/scripts/run_luks_script.php',
+      type: 'POST',
+      data: postData,
+      success: function(data) {
+        // Always show output in Status tab
+        showTab('status');
+        setStatus(data);
+        
+        // Check if we need to download a backup file
+        if (backupLocation === 'download') {
+          const downloadMatch = data.match(/DOWNLOAD_READY: (.+)/);
+          if (downloadMatch) {
+            const downloadPath = downloadMatch[1];
+            const filename = downloadPath.split('/').pop();
+            downloadBackupFile(filename);
+          }
+        }
+      },
+      error: function() {
+        setStatus('Error: Failed to execute the LUKS headers backup script. Check browser console for more details.');
+      }
+    });
+  }
+
+  // ========================================
+  // Encryption Info Workflow Functions  
+  // ========================================
+  
+  // Global workflow state
+  let encinfoWorkflowState = {
+    detailLevel: '',
+    keyType: '',
+    action: '',
+    // Store successful credentials for downloads
+    lastSuccessfulPostData: null,
+    // Store temp file path for simple download
+    tempFilePath: null
+  };
+  
+  // Step 1: Detail Level Selection
+  function selectDetailLevel(level) {
+    console.log('DEBUG: selectDetailLevel called with:', level);
+    encinfoWorkflowState.detailLevel = level;
+    
+    // Update the selected detail level display (only Step 2 and Step 3 now exist)
+    document.getElementById('selectedDetailLevel').textContent = level.charAt(0).toUpperCase() + level.slice(1).replace('_', ' ');
+    document.getElementById('selectedDetailLevel2').textContent = level.charAt(0).toUpperCase() + level.slice(1).replace('_', ' ');
+    
+    // Hide Step 1 and show Step 2
+    document.getElementById('encinfoStep1').style.display = 'none';
+    document.getElementById('encinfoStep2').style.display = 'block';
+  }
+  
+  // Step 2: Key Type Selection
+  function selectKeyType(keyType) {
+    console.log('DEBUG: selectKeyType called with:', keyType);
+    encinfoWorkflowState.keyType = keyType;
+    
+    // Update the selected key type display (only Step 3 now exists)
+    const displayKeyType = keyType.charAt(0).toUpperCase() + keyType.slice(1);
+    document.getElementById('selectedKeyType').textContent = displayKeyType;
+    
+    // Show/hide appropriate input sections
+    const passphraseSection = document.getElementById('passphraseSection_encinfo');
+    const keyfileSection = document.getElementById('keyfileSection_encinfo');
+    
+    if (keyType === 'passphrase') {
+      passphraseSection.style.display = 'block';
+      keyfileSection.style.display = 'none';
+    } else {
+      passphraseSection.style.display = 'none';
+      keyfileSection.style.display = 'block';
+    }
+    
+    // Hide Step 2 and show Step 3
+    document.getElementById('encinfoStep2').style.display = 'none';
+    document.getElementById('encinfoStep3').style.display = 'block';
+  }
+  
+  // Step 3: Validate and Proceed Directly to Analysis
+  function proceedToActions() {
+    console.log('DEBUG: proceedToActions called');
+    
+    // Validate encryption key input for encinfo workflow
+    const validationError = validateEncinfoKeyInput();
+    if (validationError) {
+      alert('Error: ' + validationError);
+      return;
+    }
+    
+    // Skip Step 4 and go directly to analysis with 'view' action
+    document.getElementById('encinfoStep3').style.display = 'none';
+    document.getElementById('encinfoProgress').style.display = 'block';
+    
+    // Show spinner and execute analysis
+    showEncinfoSpinner();
+    executeEncryptionAnalysis('view');
+  }
+  
+  // Custom validation for encinfo workflow
+  function validateEncinfoKeyInput() {
+    if (encinfoWorkflowState.keyType === 'passphrase') {
+      const passphrase = document.getElementById('passphrase_encinfo').value;
+      if (!passphrase) {
+        return 'Please enter your encryption passphrase.';
+      }
+      if (passphrase.length > 512) {
+        return 'Passphrase exceeds 512 character limit (Unraid standard).';
+      }
+    } else {
+      const keyfileInput = document.getElementById('keyfile_encinfo');
+      if (!keyfileInput.files || !keyfileInput.files[0]) {
+        return 'Please select your encryption keyfile.';
+      }
+    }
+    
+    return null; // No validation errors
+  }
+  
+  // Navigation: Go Back to Previous Step
+  function goBackToStep(stepNumber) {
+    console.log('DEBUG: goBackToStep called with:', stepNumber);
+    
+    // Hide all steps first
+    for (let i = 1; i <= 4; i++) {
+      document.getElementById('encinfoStep' + i).style.display = 'none';
+    }
+    
+    // Show the requested step
+    document.getElementById('encinfoStep' + stepNumber).style.display = 'block';
+  }
+  
+  // Step 4: Execute Analysis
+  function runEncryptionInfoWorkflow(action) {
+    console.log('DEBUG: runEncryptionInfoWorkflow called with action:', action);
+    encinfoWorkflowState.action = action;
+    
+    // Hide Step 4 and show progress
+    document.getElementById('encinfoStep4').style.display = 'none';
+    document.getElementById('encinfoProgress').style.display = 'block';
+    
+    // Show spinner using official Unraid spinner
+    showEncinfoSpinner();
+    
+    // Execute the actual analysis
+    executeEncryptionAnalysis(action);
+  }
+  
+  // Show official Unraid spinner in progress card
+  function showEncinfoSpinner() {
+    const spinnerDiv = document.getElementById('encinfoSpinner');
+    if (spinnerDiv) {
+      // Apply the official spinner class for proper CSS animations
+      spinnerDiv.className = 'spinner';
+      
+      // Use Unraid's built-in spinner mechanism
+      if (typeof unraid_logo !== 'undefined') {
+        spinnerDiv.innerHTML = unraid_logo;
+      } else {
+        // Use the same fallback as the official showStatusLoading function
+        spinnerDiv.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 133.52 76.97" class="unraid_mark"><defs><linearGradient id="unraid_logo_encinfo" x1="23.76" y1="81.49" x2="109.76" y2="-4.51" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e32929"/><stop offset="1" stop-color="#ff8d30"/></linearGradient></defs><path d="m70,19.24zm57,0l6.54,0l0,38.49l-6.54,0l0,-38.49z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_9"/><path d="m70,19.24zm47.65,11.9l-6.55,0l0,-23.79l6.55,0l0,23.79z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_8"/><path d="m70,19.24zm31.77,-4.54l-6.54,0l0,-14.7l6.54,0l0,14.7z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_7"/><path d="m70,19.24zm15.9,11.9l-6.54,0l0,-23.79l6.54,0l0,23.79z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_6"/><path d="m63.49,19.24l6.51,0l0,38.49l-6.51,0l0,-38.49z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_5"/><path d="m70,19.24zm-22.38,26.6l6.54,0l0,23.78l-6.54,0l0,-23.78z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_4"/><path d="m70,19.24zm-38.26,43.03l6.55,0l0,14.73l-6.55,0l0,-14.73z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_3"/><path d="m70,19.24zm-54.13,26.6l6.54,0l0,23.78l-6.54,0l0,-23.78z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_2"/><path d="m70,19.24zm-63.46,38.49l-6.54,0l0,-38.49l6.54,0l0,38.49z" fill="url(#unraid_logo_encinfo)" class="unraid_mark_1"/></svg>';
+      }
+      spinnerDiv.style.display = 'block';
+    }
+  }
+  
+  // Hide spinner in progress card
+  function hideEncinfoSpinner() {
+    const spinnerDiv = document.getElementById('encinfoSpinner');
+    if (spinnerDiv) {
+      spinnerDiv.style.display = 'none';
+      spinnerDiv.innerHTML = '';
+      spinnerDiv.className = '';
+    }
+  }
+  
+  // Execute the actual encryption analysis (replaces old runEncryptionInfo)
+  function executeEncryptionAnalysis(action) {
+    console.log('DEBUG: executeEncryptionAnalysis called with action:', action);
+    
+    // Update progress text
+    document.getElementById('encinfoProgressText').textContent = 'Analyzing LUKS encryption...';
+    
+    // Prepare data using the same pattern as existing code
+    const postData = {
+      keyType: encinfoWorkflowState.keyType,
+      detailLevel: encinfoWorkflowState.detailLevel
+    };
+    
+    if (encinfoWorkflowState.keyType === 'passphrase') {
+      const passphrase = document.getElementById('passphrase_encinfo').value;
+      postData.passphrase = passphrase;
+      
+      // Add CSRF token
+      if (csrf_token) {
+        postData.csrf_token = csrf_token;
+      }
+      
+      // Make request directly for passphrase
+      makeEncryptionInfoWorkflowRequest(postData, action);
+    } else {
+      const keyfileInput = document.getElementById('keyfile_encinfo');
+      if (keyfileInput.files && keyfileInput.files[0]) {
+        // Convert file to base64 (same pattern as existing code)
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const base64Data = e.target.result;
+          postData.keyfileData = base64Data;
+          
+          // Add CSRF token
+          if (csrf_token) {
+            postData.csrf_token = csrf_token;
+          }
+          
+          makeEncryptionInfoWorkflowRequest(postData, action);
+        };
+        reader.readAsDataURL(keyfileInput.files[0]);
+        return;
+      } else {
+        hideEncinfoSpinner();
+        showEncinfoError('No keyfile selected');
+        return;
+      }
+    }
+  }
+  
+  // Make AJAX request for encryption analysis (stays in-tab)
+  function makeEncryptionInfoWorkflowRequest(postData, action) {
+    console.log('DEBUG: makeEncryptionInfoWorkflowRequest called with action:', action);
+    
+    // For download actions, use the download script instead
+    const scriptUrl = action === 'download' 
+      ? '/plugins/encrypted-drive-manager/scripts/run_encryption_download.php'
+      : '/plugins/encrypted-drive-manager/scripts/run_encryption_info.php';
+    
+    $.ajax({
+      url: scriptUrl,
+      type: 'POST',
+      data: postData,
+      success: function(data) {
+        console.log('DEBUG: Encryption analysis response received');
+        hideEncinfoSpinner();
+        
+        if (action === 'download') {
+          // Check for download signal and trigger download
+          const downloadMatch = data.match(/DOWNLOAD_READY: (.+)/);
+          if (downloadMatch) {
+            const downloadPath = downloadMatch[1];
+            const filename = downloadPath.split('/').pop();
+            
+            // Trigger download
+            window.location.href = '/plugins/encrypted-drive-manager/downloads/' + filename;
+            
+            // Show success message and return to results
+            document.getElementById('encinfoProgress').style.display = 'none';
+            document.getElementById('encinfoResults').style.display = 'block';
+            return;
+          }
+        } else {
+          // Store successful credentials for future downloads
+          encinfoWorkflowState.lastSuccessfulPostData = postData;
+          
+          // Check for temp file path in the response
+          const tempFileMatch = data.match(/TEMP_FILE_READY: (.+)$/m);
+          if (tempFileMatch) {
+            encinfoWorkflowState.tempFilePath = tempFileMatch[1].trim();
+            console.log('DEBUG: Temp file saved for download:', encinfoWorkflowState.tempFilePath);
+          }
+        }
+        
+        // Parse and display results in cards (remove temp file line from display)
+        const displayData = data.replace(/\n\nTEMP_FILE_READY: .+$/m, '');
+        parseAndDisplayResults(displayData);
+      },
+      error: function() {
+        hideEncinfoSpinner();
+        showEncinfoError('Failed to execute encryption analysis. Check browser console for more details.');
+      }
+    });
+  }
+  
+  // Parse shell script output and display as organized cards
+  function parseAndDisplayResults(rawOutput) {
+    console.log('DEBUG: parseAndDisplayResults called');
+    
+    // Hide progress and show results
+    document.getElementById('encinfoProgress').style.display = 'none';
+    document.getElementById('encinfoResults').style.display = 'block';
+    
+    const resultsContent = document.getElementById('encinfoResultsContent');
+    
+    try {
+      // Parse the output into structured data
+      const parsedData = parseEncryptionOutput(rawOutput);
+      
+      // Generate organized card display
+      resultsContent.innerHTML = generateResultsCards(parsedData);
+    } catch (error) {
+      console.error('DEBUG: Error parsing output:', error);
+      // Fallback to raw output display
+      resultsContent.innerHTML = '<div style="padding: 20px; border-radius: 8px; border: 2px solid #ffa726; background-color: rgba(255, 167, 38, 0.1);"><h4 style="color: #ffa726; margin-top: 0;"><i class="fa fa-exclamation-triangle"></i> Parsing Note</h4><p>Results displayed in raw format due to parsing complexity.</p></div><pre style="padding: 15px; border-radius: 5px; border: 1px solid #ccc; background-color: #f8f9fa; font-family: monospace; white-space: pre-wrap; word-wrap: break-word; margin-top: 15px;">' + rawOutput + '</pre>';
+    }
+  }
+  
+  // Parse shell script output into structured data
+  function parseEncryptionOutput(rawOutput) {
+    const lines = rawOutput.split('\n');
+    const data = {
+      header: {},
+      summary: {},
+      devices: [],
+      deviceGroups: [],
+      errors: []
+    };
+    
+    let currentSection = 'header';
+    let currentDevice = null;
+    let currentGroup = null;
+    let currentSlotDetails = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // Skip empty lines and separator lines
+      if (!line || line.match(/^[=\-]+$/)) continue;
+      
+      // Detect section headers to understand context
+      if (line.includes('Simple Device List')) {
+        currentSection = 'simple';
+        continue;
+      } else if (line.includes('Very Detailed Analysis')) {
+        currentSection = 'very_detailed';
+        continue;
+      } else if (line.includes('Detailed Analysis with Smart Grouping')) {
+        currentSection = 'detailed';
+        continue;
+      } else if (line.includes('Analysis Complete')) {
+        currentSection = 'complete';
+        continue;
+      }
+      
+      // Parse header information
+      if (line.startsWith('Analysis Mode:')) {
+        data.header.analysisMode = line.split(':')[1].trim();
+      } else if (line.startsWith('Generated:')) {
+        data.header.generated = line.split(':', 2)[1].trim();
+      } else if (line.startsWith('Found') && line.includes('LUKS encrypted device')) {
+        const match = line.match(/Found (\d+) LUKS encrypted device/);
+        if (match) {
+          data.summary.deviceCount = parseInt(match[1]);
+        }
+      }
+      
+      // SIMPLE MODE: Parse ✅/❌ device lines
+      else if (currentSection === 'simple' && line.match(/^[✅❌]/)) {
+        const simpleMatch = line.match(/^([✅❌]) (.+) \((.+)\) - (.+)/);
+        if (simpleMatch) {
+          data.devices.push({
+            mode: 'simple',
+            status: simpleMatch[1],
+            name: simpleMatch[2],
+            type: simpleMatch[3],
+            result: simpleMatch[4]
+          });
+        }
+      }
+      
+      // VERY DETAILED MODE: Parse individual device sections
+      else if (currentSection === 'very_detailed' && line.startsWith('Device: ')) {
+        // Start new device
+        const deviceMatch = line.match(/Device: (.+) \((.+)\)/);
+        if (deviceMatch) {
+          currentDevice = {
+            mode: 'very_detailed',
+            name: deviceMatch[1],
+            type: deviceMatch[2],
+            luksVersion: '',
+            slotUsage: '',
+            authResult: '',
+            slotDetails: []
+          };
+          data.devices.push(currentDevice);
+          currentSlotDetails = [];
+        }
+      }
+      
+      // VERY DETAILED MODE: Parse device details
+      else if (currentSection === 'very_detailed' && currentDevice) {
+        if (line.includes('LUKS Version:')) {
+          currentDevice.luksVersion = line.split(':')[1].trim();
+        } else if (line.includes('Slot Usage:')) {
+          currentDevice.slotUsage = line.split(':')[1].trim();
+        } else if (line.includes('Passphrase:') || line.includes('Keyfile:')) {
+          currentDevice.authResult = line.split(':')[1].trim();
+        } else if (line.includes('Detailed Slot Analysis:')) {
+          // Start collecting slot details
+          currentSlotDetails = [];
+        } else if (line.startsWith('    ├─ Slot ') || line.startsWith('├─ Slot ')) {
+          // Parse slot details: "    ├─ Slot 0: Original encryption key"
+          const slotMatch = line.match(/├─ Slot (\d+): (.+)/);
+          if (slotMatch) {
+            currentSlotDetails.push({
+              slot: parseInt(slotMatch[1]),
+              description: slotMatch[2]
+            });
+            currentDevice.slotDetails = currentSlotDetails;
+          }
+        }
+      }
+      
+      // DETAILED MODE: Parse device group sections
+      else if (currentSection === 'detailed' && line.match(/.+ \(\d+ device[s]?\):/)) {
+        const groupMatch = line.match(/(.+) \((\d+) device[s]?\):/);
+        if (groupMatch) {
+          currentGroup = {
+            mode: 'detailed',
+            name: groupMatch[1],
+            deviceCount: parseInt(groupMatch[2]),
+            devices: [],
+            luksVersion: '',
+            slotUsage: '',
+            slotDetails: []
+          };
+          data.deviceGroups.push(currentGroup);
+          currentSlotDetails = [];
+        }
+      }
+      
+      // DETAILED MODE: Parse group details
+      else if (currentSection === 'detailed' && currentGroup) {
+        if (line.includes('Devices:')) {
+          // Parse device list: "    Devices: /dev/md1p1 /dev/md2p1 /dev/md3p1"
+          const deviceList = line.split(':')[1].trim().split(' ');
+          currentGroup.devices = deviceList;
+        } else if (line.includes('Device:')) {
+          // Single device: "    Device: /dev/md1p1"
+          currentGroup.devices = [line.split(':')[1].trim()];
+        } else if (line.includes('LUKS Version:')) {
+          currentGroup.luksVersion = line.split(':')[1].trim();
+        } else if (line.includes('Slot Usage:')) {
+          currentGroup.slotUsage = line.split(':')[1].trim();
+        } else if (line.includes('Slot Configuration:')) {
+          currentSlotDetails = [];
+        } else if (line.startsWith('    ├─ Slot ') || line.startsWith('├─ Slot ')) {
+          const slotMatch = line.match(/├─ Slot (\d+): (.+)/);
+          if (slotMatch) {
+            currentSlotDetails.push({
+              slot: parseInt(slotMatch[1]),
+              description: slotMatch[2]
+            });
+            currentGroup.slotDetails = currentSlotDetails;
+          }
+        }
+      }
+      
+      // Handle errors
+      else if (line.toLowerCase().includes('error') || line.toLowerCase().includes('failed')) {
+        data.errors.push(line);
+      }
+    }
+    
+    return data;
+  }
+  
+  // Generate HTML cards from parsed data
+  function generateResultsCards(data) {
+    let html = '';
+    
+    // Summary Card
+    html += generateSummaryCard(data);
+    
+    // Error Card (if any errors)
+    if (data.errors.length > 0) {
+      html += generateErrorCard(data.errors);
+    }
+    
+    // Device Results Cards (Simple and Very Detailed modes)
+    if (data.devices.length > 0) {
+      html += generateDeviceCards(data);
+    }
+    
+    // Group Results Cards (Detailed mode with smart grouping)
+    if (data.deviceGroups.length > 0) {
+      html += generateGroupCards(data.deviceGroups);
+    }
+    
+    return html;
+  }
+  
+  // Generate summary card
+  function generateSummaryCard(data) {
+    const mode = data.header.analysisMode || 'Unknown';
+    const generated = data.header.generated || 'Unknown';
+    const deviceCount = data.summary.deviceCount || 0;
+    
+    return `
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #4dabf7; background-color: rgba(77, 171, 247, 0.1);">
+        <h4 style="margin-top: 0; color: #4dabf7;"><i class="fa fa-info-circle"></i> Analysis Summary</h4>
+        <p><strong>Analysis Mode:</strong> ${mode}</p>
+        <p><strong>Generated:</strong> ${generated}</p>
+        <p><strong>LUKS Devices Found:</strong> ${deviceCount}</p>
+      </div>
+    `;
+  }
+  
+  // Generate error card
+  function generateErrorCard(errors) {
+    const errorList = errors.map(error => `<li>${error}</li>`).join('');
+    return `
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #ff6b6b; background-color: rgba(255, 107, 107, 0.1);">
+        <h4 style="margin-top: 0; color: #ff6b6b;"><i class="fa fa-exclamation-triangle"></i> Issues Detected</h4>
+        <ul>${errorList}</ul>
+      </div>
+    `;
+  }
+  
+  // Generate device cards (Simple and Very Detailed modes)
+  function generateDeviceCards(data) {
+    let html = '';
+    
+    // Determine the mode from first device
+    const mode = data.devices[0]?.mode || 'simple';
+    
+    if (mode === 'simple') {
+      // SIMPLE MODE: Group by type and show basic validation results
+      const devicesByType = {};
+      data.devices.forEach(device => {
+        const type = device.type || 'Unknown';
+        if (!devicesByType[type]) {
+          devicesByType[type] = [];
+        }
+        devicesByType[type].push(device);
+      });
+      
+      Object.keys(devicesByType).forEach(type => {
+        const devices = devicesByType[type];
+        const { cardColor, cardBgColor } = getCardColors(type);
+        
+        html += `
+          <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid ${cardColor}; background-color: ${cardBgColor};">
+            <h4 style="margin-top: 0; color: ${cardColor};"><i class="fa fa-hdd-o"></i> ${type} (${devices.length} device${devices.length > 1 ? 's' : ''})</h4>
+        `;
+        
+        devices.forEach(device => {
+          const statusColor = device.status === '✅' ? '#51cf66' : '#ff6b6b';
+          html += `
+            <div style="margin: 10px 0; padding: 10px; border-radius: 5px; border-left: 4px solid ${statusColor}; background-color: rgba(0,0,0,0.05);">
+              <p><strong>${device.status} ${device.name}</strong> - ${device.result}</p>
+            </div>
+          `;
+        });
+        
+        html += '</div>';
+      });
+    } else if (mode === 'very_detailed') {
+      // VERY DETAILED MODE: Show comprehensive individual device analysis
+      const devicesByType = {};
+      data.devices.forEach(device => {
+        const type = device.type || 'Unknown';
+        if (!devicesByType[type]) {
+          devicesByType[type] = [];
+        }
+        devicesByType[type].push(device);
+      });
+      
+      Object.keys(devicesByType).forEach(type => {
+        const devices = devicesByType[type];
+        const { cardColor, cardBgColor } = getCardColors(type);
+        
+        html += `
+          <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid ${cardColor}; background-color: ${cardBgColor};">
+            <h4 style="margin-top: 0; color: ${cardColor};"><i class="fa fa-hdd-o"></i> ${type} (${devices.length} device${devices.length > 1 ? 's' : ''})</h4>
+        `;
+        
+        devices.forEach(device => {
+          html += generateDetailedDeviceEntry(device);
+        });
+        
+        html += '</div>';
+      });
+    }
+    
+    return html;
+  }
+  
+  // Get card colors based on device type
+  function getCardColors(type) {
+    const isArrayType = type.toLowerCase().includes('array');
+    const isPoolType = type.toLowerCase().includes('pool');
+    
+    let cardColor = '#51cf66'; // Default green
+    let cardBgColor = 'rgba(81, 207, 102, 0.1)';
+    
+    if (isArrayType) {
+      cardColor = '#4dabf7'; // Blue for array
+      cardBgColor = 'rgba(77, 171, 247, 0.1)';
+    } else if (isPoolType) {
+      cardColor = '#ffa726'; // Orange for pool
+      cardBgColor = 'rgba(255, 167, 38, 0.1)';
+    }
+    
+    return { cardColor, cardBgColor };
+  }
+  
+  // Generate detailed device entry for Very Detailed mode
+  function generateDetailedDeviceEntry(device) {
+    const authColor = device.authResult.includes('✅') || device.authResult.includes('Valid') ? '#51cf66' : '#ff6b6b';
+    
+    let html = `
+      <div style="margin: 15px 0; padding: 15px; border-radius: 5px; border-left: 4px solid ${authColor}; background-color: rgba(0,0,0,0.05);">
+        <p><strong><i class="fa fa-lock"></i> ${device.name}</strong></p>
+    `;
+    
+    if (device.luksVersion) {
+      html += `<p><strong>LUKS Version:</strong> ${device.luksVersion}</p>`;
+    }
+    
+    if (device.slotUsage) {
+      // Parse slot usage to add appropriate styling
+      const isHealthy = device.slotUsage.includes('✅') || device.slotUsage.includes('Healthy');
+      const isWarning = device.slotUsage.includes('WARNING');
+      const isCritical = device.slotUsage.includes('CRITICAL');
+      
+      let slotColor = '#51cf66';
+      if (isWarning) slotColor = '#ffa726';
+      if (isCritical) slotColor = '#ff6b6b';
+      
+      html += `<p><strong>Slot Usage:</strong> <span style="color: ${slotColor};">${device.slotUsage}</span></p>`;
+    }
+    
+    if (device.authResult) {
+      html += `<p><strong>Authentication:</strong> <span style="color: ${authColor};">${device.authResult}</span></p>`;
+    }
+    
+    // Display slot details if available
+    if (device.slotDetails && device.slotDetails.length > 0) {
+      html += '<p><strong>Slot Configuration:</strong></p>';
+      html += '<div style="margin-left: 15px;">';
+      
+      device.slotDetails.forEach(slot => {
+        const isHardwareDerived = slot.description.includes('⭐') || slot.description.includes('Hardware-derived');
+        const isOriginal = slot.slot === 0 || slot.description.includes('Original');
+        
+        let slotIcon = '🔑';
+        if (isOriginal) slotIcon = '🔐';
+        if (isHardwareDerived) slotIcon = '⭐';
+        
+        html += `<p style="margin: 5px 0;">${slotIcon} <strong>Slot ${slot.slot}:</strong> ${slot.description}</p>`;
+      });
+      
+      html += '</div>';
+    }
+    
+    html += '</div>';
+    return html;
+  }
+  
+  // Generate group cards (Detailed mode with smart grouping)
+  function generateGroupCards(groups) {
+    let html = '';
+    
+    groups.forEach(group => {
+      const { cardColor, cardBgColor } = getCardColors(group.name);
+      
+      html += `
+        <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid ${cardColor}; background-color: ${cardBgColor};">
+          <h4 style="margin-top: 0; color: ${cardColor};"><i class="fa fa-hdd-o"></i> ${group.name}</h4>
+          <p><strong>Device Count:</strong> ${group.deviceCount}</p>
+      `;
+      
+      // Show device list
+      if (group.devices && group.devices.length > 0) {
+        if (group.devices.length === 1) {
+          html += `<p><strong>Device:</strong> ${group.devices[0]}</p>`;
+        } else {
+          html += `<p><strong>Devices:</strong> ${group.devices.join(', ')}</p>`;
+        }
+      }
+      
+      // Show LUKS version
+      if (group.luksVersion) {
+        html += `<p><strong>LUKS Version:</strong> ${group.luksVersion}</p>`;
+      }
+      
+      // Show slot usage with appropriate coloring
+      if (group.slotUsage) {
+        const isHealthy = group.slotUsage.includes('✅') || group.slotUsage.includes('Healthy');
+        const isWarning = group.slotUsage.includes('WARNING');
+        const isCritical = group.slotUsage.includes('CRITICAL');
+        
+        let slotColor = '#51cf66';
+        if (isWarning) slotColor = '#ffa726';
+        if (isCritical) slotColor = '#ff6b6b';
+        
+        html += `<p><strong>Slot Usage:</strong> <span style="color: ${slotColor};">${group.slotUsage}</span></p>`;
+      }
+      
+      // Show slot configuration details
+      if (group.slotDetails && group.slotDetails.length > 0) {
+        html += '<p><strong>Slot Configuration:</strong></p>';
+        html += '<div style="margin-left: 15px;">';
+        
+        group.slotDetails.forEach(slot => {
+          const isHardwareDerived = slot.description.includes('⭐') || slot.description.includes('Hardware-derived');
+          const isOriginal = slot.slot === 0 || slot.description.includes('Original');
+          
+          let slotIcon = '🔑';
+          if (isOriginal) slotIcon = '🔐';
+          if (isHardwareDerived) slotIcon = '⭐';
+          
+          html += `<p style="margin: 5px 0;">${slotIcon} <strong>Slot ${slot.slot}:</strong> ${slot.description}</p>`;
+        });
+        
+        html += '</div>';
+      }
+      
+      html += '</div>';
+    });
+    
+    return html;
+  }
+  
+  // Show error in results area
+  function showEncinfoError(message) {
+    document.getElementById('encinfoProgress').style.display = 'none';
+    document.getElementById('encinfoResults').style.display = 'block';
+    
+    const resultsContent = document.getElementById('encinfoResultsContent');
+    resultsContent.innerHTML = '<div style="padding: 20px; border-radius: 8px; border: 2px solid #ff6b6b; background-color: rgba(255, 107, 107, 0.1);"><h4 style="color: #ff6b6b; margin-top: 0;"><i class="fa fa-exclamation-triangle"></i> Error</h4><p>' + message + '</p></div>';
+  }
+  
+  // Download the encryption analysis report (simplified approach)
+  function downloadEncryptionReport() {
+    console.log('DEBUG: downloadEncryptionReport called');
+    
+    // Check if we have a temp file from a successful analysis
+    if (!encinfoWorkflowState.tempFilePath) {
+      alert('Error: No analysis file available. Please run an analysis first before downloading.');
+      return;
+    }
+    
+    console.log('DEBUG: Downloading temp file:', encinfoWorkflowState.tempFilePath);
+    
+    // Extract filename from path for download
+    const filename = encinfoWorkflowState.tempFilePath.split('/').pop();
+    
+    // Trigger download using simple file serving
+    window.location.href = '/plugins/encrypted-drive-manager/scripts/download_analysis.php?file=' + encodeURIComponent(filename);
+  }
+  
+  // Reset workflow to start over
+  function resetEncryptionInfoWorkflow() {
+    console.log('DEBUG: resetEncryptionInfoWorkflow called');
+    
+    // Reset state
+    encinfoWorkflowState = {
+      detailLevel: '',
+      keyType: '',
+      action: '',
+      lastSuccessfulPostData: null,
+      tempFilePath: null
+    };
+    
+    // Hide all steps except Step 1 (no Step 4 anymore)
+    for (let i = 2; i <= 3; i++) {
+      document.getElementById('encinfoStep' + i).style.display = 'none';
+    }
+    document.getElementById('encinfoProgress').style.display = 'none';
+    document.getElementById('encinfoResults').style.display = 'none';
+    document.getElementById('encinfoStep1').style.display = 'block';
+    
+    // Clear form inputs
+    document.getElementById('passphrase_encinfo').value = '';
+    const keyfileInput = document.getElementById('keyfile_encinfo');
+    if (keyfileInput) keyfileInput.value = '';
+  }
+
+  // ========================================
+  // LUKS Headers Workflow Functions  
+  // ========================================
+  
+  // Global headers workflow state
+  let headersWorkflowState = {
+    operation: '',      // 'backup' or 'restore'
+    location: '',       // 'download' or 'server'
+    keyType: '',        // 'passphrase' or 'keyfile'
+    action: ''          // for future use
+  };
+  
+  // Step 1: Operation Selection
+  function selectHeadersOperation(operation) {
+    console.log('DEBUG: selectHeadersOperation called with:', operation);
+    headersWorkflowState.operation = operation;
+    
+    if (operation === 'backup') {
+      // Hide Step 1 and show Step 2 (backup location selection)
+      document.getElementById('headersStep1').style.display = 'none';
+      document.getElementById('headersStep2').style.display = 'block';
+    } else if (operation === 'restore') {
+      // Hide Step 1 and show restore instructions
+      document.getElementById('headersStep1').style.display = 'none';
+      document.getElementById('headersRestoreInfo').style.display = 'block';
+    }
+  }
+  
+  // Step 2: Backup Location Selection
+  function selectBackupLocation(location) {
+    console.log('DEBUG: selectBackupLocation called with:', location);
+    headersWorkflowState.location = location;
+    
+    // Update location display text
+    const locationText = location === 'download' ? 'Download to PC' : 'Save to Server';
+    document.getElementById('selectedBackupLocation').textContent = locationText;
+    document.getElementById('selectedBackupLocation2').textContent = locationText;
+    
+    // Hide Step 2 and show Step 3
+    document.getElementById('headersStep2').style.display = 'none';
+    document.getElementById('headersStep3').style.display = 'block';
+  }
+  
+  // Step 3: Key Type Selection
+  function selectHeadersKeyType(keyType) {
+    console.log('DEBUG: selectHeadersKeyType called with:', keyType);
+    headersWorkflowState.keyType = keyType;
+    
+    // Update the selected key type display
+    const displayKeyType = keyType.charAt(0).toUpperCase() + keyType.slice(1);
+    document.getElementById('selectedHeadersKeyType').textContent = displayKeyType;
+    
+    // Show/hide appropriate input sections
+    const passphraseSection = document.getElementById('passphraseSection_headers');
+    const keyfileSection = document.getElementById('keyfileSection_headers');
+    
+    if (keyType === 'passphrase') {
+      passphraseSection.style.display = 'block';
+      keyfileSection.style.display = 'none';
+    } else {
+      passphraseSection.style.display = 'none';
+      keyfileSection.style.display = 'block';
+    }
+    
+    // Hide Step 3 and show Step 4
+    document.getElementById('headersStep3').style.display = 'none';
+    document.getElementById('headersStep4').style.display = 'block';
+  }
+  
+  // Step 4: Validate and Proceed to Backup
+  function proceedToHeadersBackup() {
+    console.log('DEBUG: proceedToHeadersBackup called');
+    
+    // Validate encryption key input for headers workflow
+    const validationError = validateHeadersKeyInput();
+    if (validationError) {
+      alert('Error: ' + validationError);
+      return;
+    }
+    
+    // Hide Step 4 and show progress
+    document.getElementById('headersStep4').style.display = 'none';
+    document.getElementById('headersProgress').style.display = 'block';
+    
+    // Show spinner and execute backup
+    showHeadersSpinner();
+    executeHeadersBackup();
+  }
+  
+  // Custom validation for headers workflow
+  function validateHeadersKeyInput() {
+    if (headersWorkflowState.keyType === 'passphrase') {
+      const passphrase = document.getElementById('passphrase_headers').value;
+      if (!passphrase) {
+        return 'Please enter your encryption passphrase.';
+      }
+      if (passphrase.length > 512) {
+        return 'Passphrase exceeds 512 character limit (Unraid standard).';
+      }
+    } else {
+      const keyfileInput = document.getElementById('keyfile_headers');
+      if (!keyfileInput.files || !keyfileInput.files[0]) {
+        return 'Please select your encryption keyfile.';
+      }
+      
+      // Validate ZIP password for keyfile users
+      const zipPassword = document.getElementById('zipPassword_headers').value;
+      if (!zipPassword) {
+        return 'Please enter a password to encrypt the backup ZIP file.';
+      }
+      if (zipPassword.length < 4) {
+        return 'ZIP password must be at least 4 characters long.';
+      }
+      if (zipPassword.length > 512) {
+        return 'ZIP password exceeds 512 character limit.';
+      }
+    }
+    
+    return null; // No validation errors
+  }
+  
+  // Navigation: Go Back to Previous Step
+  function goBackToHeadersStep(stepNumber) {
+    console.log('DEBUG: goBackToHeadersStep called with:', stepNumber);
+    
+    // Hide all steps first
+    for (let i = 1; i <= 4; i++) {
+      document.getElementById('headersStep' + i).style.display = 'none';
+    }
+    document.getElementById('headersRestoreInfo').style.display = 'none';
+    
+    // Show the requested step
+    document.getElementById('headersStep' + stepNumber).style.display = 'block';
+  }
+  
+  // Show official Unraid spinner in progress card
+  function showHeadersSpinner() {
+    const spinnerDiv = document.getElementById('headersSpinner');
+    if (spinnerDiv) {
+      // Apply the official spinner class for proper CSS animations
+      spinnerDiv.className = 'spinner';
+      
+      // Use Unraid's built-in spinner mechanism
+      if (typeof unraid_logo !== 'undefined') {
+        spinnerDiv.innerHTML = unraid_logo;
+      } else {
+        // Use the same fallback as the official showStatusLoading function
+        spinnerDiv.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 133.52 76.97" class="unraid_mark"><defs><linearGradient id="unraid_logo_headers" x1="23.76" y1="81.49" x2="109.76" y2="-4.51" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e32929"/><stop offset="1" stop-color="#ff8d30"/></linearGradient></defs><path d="m70,19.24zm57,0l6.54,0l0,38.49l-6.54,0l0,-38.49z" fill="url(#unraid_logo_headers)" class="unraid_mark_9"/><path d="m70,19.24zm47.65,11.9l-6.55,0l0,-23.79l6.55,0l0,23.79z" fill="url(#unraid_logo_headers)" class="unraid_mark_8"/><path d="m70,19.24zm31.77,-4.54l-6.54,0l0,-14.7l6.54,0l0,14.7z" fill="url(#unraid_logo_headers)" class="unraid_mark_7"/><path d="m70,19.24zm15.9,11.9l-6.54,0l0,-23.79l6.54,0l0,23.79z" fill="url(#unraid_logo_headers)" class="unraid_mark_6"/><path d="m63.49,19.24l6.51,0l0,38.49l-6.51,0l0,-38.49z" fill="url(#unraid_logo_headers)" class="unraid_mark_5"/><path d="m70,19.24zm-22.38,26.6l6.54,0l0,23.78l-6.54,0l0,-23.78z" fill="url(#unraid_logo_headers)" class="unraid_mark_4"/><path d="m70,19.24zm-38.26,43.03l6.55,0l0,14.73l-6.55,0l0,-14.73z" fill="url(#unraid_logo_headers)" class="unraid_mark_3"/><path d="m70,19.24zm-54.13,26.6l6.54,0l0,23.78l-6.54,0l0,-23.78z" fill="url(#unraid_logo_headers)" class="unraid_mark_2"/><path d="m70,19.24zm-63.46,38.49l-6.54,0l0,-38.49l6.54,0l0,38.49z" fill="url(#unraid_logo_headers)" class="unraid_mark_1"/></svg>';
+      }
+      spinnerDiv.style.display = 'block';
+    }
+  }
+  
+  // Hide spinner in progress card
+  function hideHeadersSpinner() {
+    const spinnerDiv = document.getElementById('headersSpinner');
+    if (spinnerDiv) {
+      spinnerDiv.style.display = 'none';
+      spinnerDiv.innerHTML = '';
+      spinnerDiv.className = '';
+    }
+  }
+  
+  // Execute the actual headers backup
+  function executeHeadersBackup() {
+    console.log('DEBUG: executeHeadersBackup called');
+    
+    // Update progress text
+    document.getElementById('headersProgressText').textContent = 'Backing up LUKS headers...';
+    
+    // Prepare data using the same pattern as existing code
+    const postData = {
+      keyType: headersWorkflowState.keyType,
+      backupHeaders: headersWorkflowState.location === 'download' ? 'download' : 'yes',
+      dryRun: 'no', // Headers backup is always live
+      headersOnly: 'true' // Flag to indicate this is headers-only operation
+    };
+    
+    if (headersWorkflowState.keyType === 'passphrase') {
+      const passphrase = document.getElementById('passphrase_headers').value;
+      postData.passphrase = passphrase;
+      
+      // Add CSRF token
+      if (csrf_token) {
+        postData.csrf_token = csrf_token;
+      }
+      
+      // Make request directly for passphrase
+      makeHeadersWorkflowRequest(postData);
+    } else {
+      const keyfileInput = document.getElementById('keyfile_headers');
+      if (keyfileInput.files && keyfileInput.files[0]) {
+        // Add ZIP password for keyfile users
+        const zipPassword = document.getElementById('zipPassword_headers').value;
+        postData.zipPassword = zipPassword;
+        console.log('DEBUG: ZIP password included for headers keyfile user');
+        
+        // Convert file to base64 (same pattern as other tabs)
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const base64Data = e.target.result;
+          postData.keyfileData = base64Data;
+          
+          // Add CSRF token
+          if (csrf_token) {
+            postData.csrf_token = csrf_token;
+          }
+          
+          makeHeadersWorkflowRequest(postData);
+        };
+        reader.readAsDataURL(keyfileInput.files[0]);
+        return;
+      } else {
+        hideHeadersSpinner();
+        showHeadersError('No keyfile selected');
+        return;
+      }
+    }
+  }
+  
+  // Make AJAX request for headers backup (stays in-tab)
+  function makeHeadersWorkflowRequest(postData) {
+    console.log('DEBUG: makeHeadersWorkflowRequest called');
+    
+    $.ajax({
+      url: '/plugins/encrypted-drive-manager/scripts/run_luks_script.php',
+      type: 'POST',
+      data: postData,
+      success: function(data) {
+        hideHeadersSpinner();
+        
+        // Check if backup operations actually succeeded before showing success
+        const hasKeyVerification = data.includes('Key verified successfully');
+        const hasProcessedDevices = data.includes('Processed') && data.includes('encrypted device(s) successfully');
+        const hasDownloadReady = data.includes('DOWNLOAD_READY:');
+        
+        // Check if zero devices were processed (indicates authentication failure)
+        const processedZeroDevices = data.includes('Processed 0 encrypted device(s) successfully');
+        
+        // If zero devices were processed OR none of the real success indicators are found, show authentication error
+        if (processedZeroDevices || (!hasKeyVerification && !hasProcessedDevices && !hasDownloadReady)) {
+          const keyType = headersWorkflowState.keyType || 'passphrase';
+          if (keyType === 'passphrase') {
+            showHeadersError('❌ Invalid passphrase - Please verify your encryption passphrase is correct and try again.');
+          } else {
+            showHeadersError('❌ Invalid keyfile - Please verify you\'ve selected the correct keyfile and try again.');
+          }
+          return;
+        }
+        
+        // Check if we need to download a backup file
+        if (headersWorkflowState.location === 'download') {
+          const downloadMatch = data.match(/DOWNLOAD_READY: (.+)/);
+          if (downloadMatch) {
+            const downloadPath = downloadMatch[1];
+            const filename = downloadPath.split('/').pop();
+            
+            // Trigger download
+            window.location.href = '/plugins/encrypted-drive-manager/downloads/' + filename;
+          }
+        }
+        
+        // Show results
+        showHeadersResults(data);
+      },
+      error: function() {
+        hideHeadersSpinner();
+        showHeadersError('Failed to execute LUKS headers backup. Check browser console for more details.');
+      }
+    });
+  }
+  
+  // Show results in cards format
+  function showHeadersResults(rawOutput) {
+    console.log('DEBUG: showHeadersResults called');
+    
+    // Hide progress and show results
+    document.getElementById('headersProgress').style.display = 'none';
+    document.getElementById('headersResults').style.display = 'block';
+    
+    // Create success card
+    const resultsContent = document.getElementById('headersResultsContent');
+    const operation = headersWorkflowState.operation;
+    const location = headersWorkflowState.location;
+    const locationText = location === 'download' ? 'Downloaded to PC' : 'Saved to Server';
+    
+    resultsContent.innerHTML = `
+      <div style="margin: 20px 0; padding: 20px; border-radius: 8px; border: 2px solid #51cf66; background-color: rgba(81, 207, 102, 0.1);">
+        <h4 style="margin-top: 0; color: #51cf66;"><i class="fa fa-check-circle"></i> Headers Backup Successful</h4>
+        <p><strong>Operation:</strong> LUKS Headers Backup</p>
+        <p><strong>Location:</strong> ${locationText}</p>
+        <p><strong>Files Created:</strong> Encrypted header backup files with metadata</p>
+        ${location === 'server' ? '<p><strong>Server Path:</strong> <code>/boot/config/luksheaders/</code></p>' : ''}
+      </div>
+      
+      <div style="margin: 15px 0; padding: 10px; border-radius: 5px; border-left: 4px solid #FF9800;">
+        <strong>Next Steps:</strong> Store the backup file securely. You will need your ZIP password to extract the contents if recovery is needed.
+      </div>
+    `;
+  }
+  
+  // Show error in results area
+  function showHeadersError(message) {
+    document.getElementById('headersProgress').style.display = 'none';
+    document.getElementById('headersResults').style.display = 'block';
+    
+    const resultsContent = document.getElementById('headersResultsContent');
+    resultsContent.innerHTML = '<div style="padding: 20px; border-radius: 8px; border: 2px solid #ff6b6b; background-color: rgba(255, 107, 107, 0.1);"><h4 style="color: #ff6b6b; margin-top: 0;"><i class="fa fa-exclamation-triangle"></i> Error</h4><p>' + message + '</p></div>';
+  }
+  
+  // Download backup files (for server saves)
+  function downloadHeadersBackup() {
+    console.log('DEBUG: downloadHeadersBackup called');
+    
+    // This would trigger download of server-saved files
+    // Implementation depends on backend file listing capabilities
+    alert('Download functionality for server-saved backups will be implemented in the next iteration.');
+  }
+  
+  // Reset workflow to start over
+  function resetHeadersWorkflow() {
+    console.log('DEBUG: resetHeadersWorkflow called');
+    
+    // Reset state
+    headersWorkflowState = {
+      operation: '',
+      location: '',
+      keyType: '',
+      action: ''
+    };
+    
+    // Hide all steps except Step 1
+    for (let i = 2; i <= 4; i++) {
+      document.getElementById('headersStep' + i).style.display = 'none';
+    }
+    document.getElementById('headersProgress').style.display = 'none';
+    document.getElementById('headersResults').style.display = 'none';
+    document.getElementById('headersRestoreInfo').style.display = 'none';
+    document.getElementById('headersStep1').style.display = 'block';
+    
+    // Clear form inputs
+    document.getElementById('passphrase_headers').value = '';
+    const keyfileInput = document.getElementById('keyfile_headers');
+    if (keyfileInput) keyfileInput.value = '';
+    const zipPasswordInput = document.getElementById('zipPassword_headers');
+    if (zipPasswordInput) zipPasswordInput.value = '';
+  }
+
+  function runEncryptionInfo() {
+    // Clear any previous status output
+    clearStatusSilently();
+    
+    // Validate encryption key input using shared component
+    const validationError = validateEncryptionKeyInput('encinfo');
+    if (validationError) {
+      setStatus('Error: ' + validationError);
+      return;
+    }
+
+    const detailLevel = document.getElementById('detailLevel').value;
+    const keyType = document.getElementById('keyType_encinfo').value;
+
+    // Auto-scroll to Status section to show operation progress
+    showTab('status');
+    showStatusLoading('Analyzing LUKS encryption...');
+    updateStatus('Starting encryption analysis...\nAnalyzing LUKS encrypted drives and slot configurations, please wait...');
+
+    // Prepare data using the same pattern as Auto Start (which works)
+    const postData = {
+      keyType: keyType,
+      detailLevel: detailLevel
+    };
+    
+    if (keyType === 'passphrase') {
+      const passphrase = document.getElementById('passphrase_encinfo').value;
+      postData.passphrase = passphrase;
+      
+      // Add CSRF token with debug output
+      console.log('DEBUG: CSRF token available:', csrf_token);
+      console.log('DEBUG: CSRF token length:', csrf_token ? csrf_token.length : 'undefined');
+      console.log('DEBUG: CSRF token type:', typeof csrf_token);
+      if (csrf_token && csrf_token.length > 0) {
+        postData.csrf_token = csrf_token;
+        console.log('DEBUG: CSRF token added to postData');
+      } else {
+        console.log('WARNING: CSRF token is empty or undefined!');
+      }
+      
+      // Make request directly for passphrase
+      makeEncryptionInfoAjaxRequest(postData);
+    } else {
+      const keyfileInput = document.getElementById('keyfile_encinfo');
+      if (keyfileInput.files && keyfileInput.files[0]) {
+        // Convert file to base64 (same pattern as Auto Start)
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const base64Data = e.target.result;
+          postData.keyfileData = base64Data;
+          
+          // Add CSRF token with debug output
+          console.log('DEBUG: CSRF token available (keyfile):', csrf_token);
+          console.log('DEBUG: CSRF token length (keyfile):', csrf_token ? csrf_token.length : 'undefined');
+          if (csrf_token && csrf_token.length > 0) {
+            postData.csrf_token = csrf_token;
+            console.log('DEBUG: CSRF token added to postData (keyfile)');
+          } else {
+            console.log('WARNING: CSRF token is empty or undefined (keyfile)!');
+          }
+          
+          makeEncryptionInfoAjaxRequest(postData);
+        };
+        reader.readAsDataURL(keyfileInput.files[0]);
+        return;
+      } else {
+        setStatus('Error: No keyfile selected');
+        return;
+      }
+    }
+  }
+  
+  function makeEncryptionInfoAjaxRequest(postData) {
+    console.log('DEBUG: About to send AJAX request with data:', postData);
+    console.log('DEBUG: Data keys:', Object.keys(postData));
+    console.log('DEBUG: CSRF token in postData:', postData.csrf_token);
+    
+    // Try the exact same AJAX pattern as the working Auto Start function
+    $.ajax({
+      url: '/plugins/encrypted-drive-manager/scripts/run_encryption_info.php',
+      type: 'POST',
+      data: postData,
+      beforeSend: function(xhr) {
+        console.log('DEBUG: AJAX request starting with data keys:', Object.keys(postData));
+        console.log('DEBUG: AJAX CSRF token being sent:', postData.csrf_token);
+      },
+      success: function(data) {
+        setStatus(data);
+      },
+      error: function() {
+        setStatus('Error: Failed to execute encryption analysis. Check browser console for more details.');
+      }
+    });
+  }
+
+  function downloadEncryptionInfo() {
+    // Clear any previous status output
+    clearStatusSilently();
+    
+    // Validate encryption key input using shared component
+    const validationError = validateEncryptionKeyInput('encinfo');
+    if (validationError) {
+      setStatus('Error: ' + validationError);
+      return;
+    }
+
+    const detailLevel = document.getElementById('detailLevel').value;
+    const keyType = document.getElementById('keyType_encinfo').value;
+
+    // Auto-scroll to Status section to show operation progress
+    showTab('status');
+    showStatusLoading('Preparing encryption analysis download...');
+    updateStatus('Preparing encryption analysis for download...\nGenerating encrypted analysis file, please wait...');
+
+    // Prepare data using the same pattern as Auto Start (which works)
+    const postData = {
+      keyType: keyType,
+      detailLevel: detailLevel
+    };
+    
+    if (keyType === 'passphrase') {
+      const passphrase = document.getElementById('passphrase_encinfo').value;
+      postData.passphrase = passphrase;
+      
+      // Add CSRF token
+      if (csrf_token) {
+        postData.csrf_token = csrf_token;
+      }
+      
+      // Make request directly for passphrase
+      makeEncryptionDownloadAjaxRequest(postData);
+    } else {
+      const keyfileInput = document.getElementById('keyfile_encinfo');
+      if (keyfileInput.files && keyfileInput.files[0]) {
+        // Convert file to base64 (same pattern as Auto Start)
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const base64Data = e.target.result;
+          postData.keyfileData = base64Data;
+          
+          // Add CSRF token
+          if (csrf_token) {
+            postData.csrf_token = csrf_token;
+          }
+          
+          makeEncryptionDownloadAjaxRequest(postData);
+        };
+        reader.readAsDataURL(keyfileInput.files[0]);
+        return;
+      } else {
+        setStatus('Error: No keyfile selected');
+        return;
+      }
+    }
+  }
+  
+  function makeEncryptionDownloadAjaxRequest(postData) {
+    $.ajax({
+      url: '/plugins/encrypted-drive-manager/scripts/run_encryption_download.php',
+      type: 'POST',
+      data: postData,
+      success: function(data) {
+        setStatus(data);
+        
+        // Check if we need to download the analysis file
+        const downloadMatch = data.match(/DOWNLOAD_READY: (.+)/);
+        if (downloadMatch) {
+          const downloadPath = downloadMatch[1];
+          const filename = downloadPath.split('/').pop();
+          downloadAnalysisFile(filename);
+        }
+      },
+      error: function() {
+        setStatus('Error: Failed to generate encryption analysis download. Check browser console for more details.');
+      }
+    });
+  }
+
+  function downloadAnalysisFile(filename) {
+    // Create direct download link - file is accessible via plugin downloads directory
+    const downloadUrl = '/plugins/encrypted-drive-manager/downloads/' + filename;
+    
+    // Create a temporary anchor element to trigger download
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = filename;
+    link.style.display = 'none';
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Update status to inform user
+    updateStatus('\nEncryption analysis download initiated. Check your browser\'s download folder.');
+    
+    // Clean up the temporary file after a delay
+    setTimeout(function() {
+      fetch('/plugins/encrypted-drive-manager/scripts/cleanup_download.php', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'filename=' + encodeURIComponent(filename)
+      });
+    }, 5000); // 5 second delay to ensure download completes
+  }
+
+  function goToStartArray() {
+    // Get current protocol, hostname, and port from the current page
+    const currentUrl = window.location;
+    const baseUrl = `${currentUrl.protocol}//${currentUrl.host}`;
+    const mainTabUrl = `${baseUrl}/Main`;
+    
+    // Open Main tab in a new tab
+    const newWindow = window.open(mainTabUrl, '_blank');
+    
+    // Wait for page to load, then scroll to bottom (where Array Operation section is)
+    if (newWindow) {
+      const checkForLoad = setInterval(function() {
+        try {
+          if (newWindow.document.readyState === 'complete') {
+            clearInterval(checkForLoad);
+            
+            // Small delay to ensure content is fully rendered
+            setTimeout(function() {
+              try {
+                // Scroll to the bottom of the page where Array Operation section is located
+                const scrollHeight = Math.max(
+                  newWindow.document.body.scrollHeight,
+                  newWindow.document.documentElement.scrollHeight
+                );
+                
+                newWindow.scrollTo({
+                  top: scrollHeight,
+                  behavior: 'smooth'
+                });
+              } catch (e) {
+                // Fallback for cross-origin restrictions
+                try {
+                  newWindow.scrollTo(0, 999999); // Large number to ensure bottom
+                } catch (scrollError) {
+                  // Browser restrictions prevent scrolling - user will need to scroll manually
+                }
+              }
+            }, 500); // 500ms delay to ensure DOM is fully rendered
+          }
+        } catch (e) {
+          // Ignore cross-origin errors during loading
+        }
+      }, 100);
+      
+      // Clean up interval after 10 seconds to avoid memory leaks
+      setTimeout(function() {
+        clearInterval(checkForLoad);
+      }, 10000);
+    }
+  }
+
+  function goToChangeEncryption() {
+    console.log('DEBUG: goToChangeEncryption function called');
+    
+    // Get current protocol, hostname, and port from the current page
+    const currentUrl = window.location;
+    const baseUrl = `${currentUrl.protocol}//${currentUrl.host}`;
+    const diskSettingsUrl = `${baseUrl}/Settings/DiskSettings`;
+    
+    console.log('DEBUG: Opening URL:', diskSettingsUrl);
+    
+    // Open Disk Settings in a new tab
+    const newWindow = window.open(diskSettingsUrl, '_blank');
+    
+    console.log('DEBUG: New window object:', newWindow);
+    
+    // Wait for page to load, then scroll to encryption section
+    if (newWindow) {
+      const checkForLoad = setInterval(function() {
+        try {
+          console.log('DEBUG: Checking page state:', newWindow.document.readyState);
+          if (newWindow.document.readyState === 'complete') {
+            clearInterval(checkForLoad);
+            console.log('DEBUG: Page loaded, attempting to scroll to encryption section');
+            
+            // Small delay to ensure content is fully rendered
+            setTimeout(function() {
+              try {
+                // Try multiple selectors to find the encryption section
+                const selectors = [
+                  '.title .fa-key',           // Original selector
+                  '.fa-key',                  // Just the key icon
+                  '[class*="fa-key"]',        // Any element with fa-key in class
+                ];
+                
+                let encryptionElement = null;
+                let usedSelector = '';
+                
+                for (const selector of selectors) {
+                  console.log('DEBUG: Trying selector:', selector);
+                  encryptionElement = newWindow.document.querySelector(selector);
+                  
+                  if (encryptionElement) {
+                    usedSelector = selector;
+                    console.log('DEBUG: Found element with selector:', usedSelector, encryptionElement);
+                    break;
+                  }
+                }
+                
+                if (encryptionElement) {
+                  // Find the best parent element to scroll to
+                  let scrollTarget = encryptionElement.closest('.title') || encryptionElement;
+                  
+                  scrollTarget.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'start' 
+                  });
+                  console.log('DEBUG: Scrolled to encryption section using element:', scrollTarget);
+                } else {
+                  console.log('DEBUG: Could not find encryption section - trying fallback approach');
+                  
+                  // Fallback: try more specific selectors for the encryption section
+                  const fallbackSelectors = [
+                    'form[onsubmit*="prepareForm"]',  // The encryption form
+                    'input[name="oldtext"]',          // Encryption input field
+                    'input[name="newtext"]',          // New encryption input
+                    'select[name="oldinput"]',        // Encryption input type selector
+                  ];
+                  
+                  let scrollTarget = null;
+                  for (const selector of fallbackSelectors) {
+                    console.log('DEBUG: Trying fallback selector:', selector);
+                    scrollTarget = newWindow.document.querySelector(selector);
+                    if (scrollTarget) {
+                      console.log('DEBUG: Found fallback target:', scrollTarget);
+                      break;
+                    }
+                  }
+                  
+                  if (scrollTarget) {
+                    // Try to find a good parent element to scroll to
+                    const betterTarget = scrollTarget.closest('form') || 
+                                       scrollTarget.closest('.title') || 
+                                       scrollTarget.closest('div') || 
+                                       scrollTarget;
+                    
+                    betterTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    console.log('DEBUG: Fallback scroll successful to:', betterTarget.tagName, betterTarget.className);
+                  } else {
+                    console.log('DEBUG: No encryption section found, opening page without scrolling');
+                  }
+                }
+              } catch (e) {
+                console.log('DEBUG: Could not scroll to encryption section due to browser restrictions:', e.message);
+              }
+            }, 500); // 500ms delay to ensure DOM is fully rendered
+          }
+        } catch (e) {
+          // Ignore cross-origin errors during loading
+        }
+      }, 100);
+      
+      // Clean up interval after 10 seconds to avoid memory leaks
+      setTimeout(function() {
+        clearInterval(checkForLoad);
+      }, 10000);
+    }
+  }
+
+  // Shared encryption key input component functions
+  function toggleKeyInput(tabname) {
+    const keyType = document.getElementById('keyType_' + tabname).value;
+    const passphraseSection = document.getElementById('passphraseSection_' + tabname);
+    const keyfileSection = document.getElementById('keyfileSection_' + tabname);
+    
+    if (keyType === 'passphrase') {
+      passphraseSection.style.display = 'block';
+      keyfileSection.style.display = 'none';
+      // Clear keyfile input when switching to passphrase
+      const keyfileInput = document.getElementById('keyfile_' + tabname);
+      if (keyfileInput) keyfileInput.value = '';
+    } else {
+      passphraseSection.style.display = 'none'; 
+      keyfileSection.style.display = 'block';
+      // Clear passphrase input when switching to keyfile
+      const passphraseInput = document.getElementById('passphrase_' + tabname);
+      if (passphraseInput) passphraseInput.value = '';
+    }
+  }
+
+  function togglePassphraseVisibility(tabname) {
+    const passphraseInput = document.getElementById('passphrase_' + tabname);
+    const checkbox = event.target;
+    
+    if (checkbox.checked) {
+      passphraseInput.type = 'text';
+    } else {
+      passphraseInput.type = 'password';
+    }
+  }
+
+  function validateKeyfileSize(fileInput, tabname) {
+    const maxSize = 8 * 1024 * 1024; // 8 MiB
+    const file = fileInput.files[0];
+    
+    if (file && file.size > maxSize) {
+      alert('Keyfile exceeds 8 MiB limit (Unraid standard). Please select a smaller file.');
+      fileInput.value = ''; // Clear the input
+      return false;
+    }
+    return true;
+  }
+
+  function validateEncryptionKeyInput(tabname) {
+    console.log('DEBUG: validateEncryptionKeyInput called with tabname:', tabname);
+    
+    const keyTypeElement = document.getElementById('keyType_' + tabname);
+    console.log('DEBUG: keyType element:', keyTypeElement);
+    if (!keyTypeElement) {
+      console.log('ERROR: keyType element not found for tab:', tabname);
+      return 'Internal error: key type selector not found.';
+    }
+    
+    const keyType = keyTypeElement.value;
+    console.log('DEBUG: keyType value:', keyType);
+    
+    if (keyType === 'passphrase') {
+      const passphraseElement = document.getElementById('passphrase_' + tabname);
+      console.log('DEBUG: passphrase element:', passphraseElement);
+      if (!passphraseElement) {
+        console.log('ERROR: passphrase element not found for tab:', tabname);
+        return 'Internal error: passphrase input not found.';
+      }
+      
+      const passphrase = passphraseElement.value;
+      console.log('DEBUG: passphrase length:', passphrase ? passphrase.length : 0);
+      if (!passphrase) {
+        console.log('DEBUG: Validation failed - empty passphrase');
+        return 'Please enter your encryption passphrase.';
+      }
+      if (passphrase.length > 512) {
+        console.log('DEBUG: Validation failed - passphrase too long');
+        return 'Passphrase exceeds 512 character limit (Unraid standard).';
+      }
+      console.log('DEBUG: Passphrase validation passed');
+    } else {
+      const keyfileInput = document.getElementById('keyfile_' + tabname);
+      console.log('DEBUG: keyfile element:', keyfileInput);
+      if (!keyfileInput) {
+        console.log('ERROR: keyfile element not found for tab:', tabname);
+        return 'Internal error: keyfile input not found.';
+      }
+      
+      if (!keyfileInput.files || !keyfileInput.files[0]) {
+        console.log('DEBUG: Validation failed - no keyfile selected');
+        return 'Please select your encryption keyfile.';
+      }
+      console.log('DEBUG: Keyfile selected:', keyfileInput.files[0].name);
+      
+      // Validate ZIP password for keyfile users (only for autostart and headers tabs)
+      if (tabname === 'autostart' || tabname === 'headers') {
+        const zipPasswordElement = document.getElementById('zipPassword_' + tabname);
+        console.log('DEBUG: zipPassword element:', zipPasswordElement);
+        if (!zipPasswordElement) {
+          console.log('ERROR: zipPassword element not found for tab:', tabname);
+          return 'Internal error: ZIP password input not found.';
+        }
+        
+        const zipPassword = zipPasswordElement.value;
+        console.log('DEBUG: zipPassword length:', zipPassword ? zipPassword.length : 0);
+        if (!zipPassword) {
+          console.log('DEBUG: Validation failed - empty ZIP password');
+          return 'Please enter a password to encrypt the backup ZIP file.';
+        }
+        if (zipPassword.length < 4) {
+          console.log('DEBUG: Validation failed - ZIP password too short');
+          return 'ZIP password must be at least 4 characters long.';
+        }
+        if (zipPassword.length > 512) {
+          console.log('DEBUG: Validation failed - ZIP password too long');
+          return 'ZIP password exceeds 512 character limit.';
+        }
+        console.log('DEBUG: ZIP password validation passed');
+      }
+      console.log('DEBUG: Keyfile validation passed');
+    }
+    console.log('DEBUG: Overall validation passed - returning null');
+    return null; // Valid
+  }
+
+  // Shared download detection function - checks output for DOWNLOAD_READY and triggers download
+  function handleDownloadDetection(data, backupLocation, dryRun, context = 'default') {
+    console.log('DEBUG: Checking download - backupLocation:', backupLocation, 'dryRun:', dryRun, 'context:', context);
+    if (backupLocation === 'download' && dryRun === 'no') {
+      // Look for download ready indicator in the output
+      console.log('DEBUG: Looking for DOWNLOAD_READY in output...');
+      const downloadMatch = data.match(/DOWNLOAD_READY: (\/usr\/local\/emhttp\/plugins\/encrypted-drive-manager\/downloads\/[^D\s]+\.zip)/);
+      console.log('DEBUG: Download match result:', downloadMatch);
+      if (downloadMatch) {
+        const downloadPath = downloadMatch[1].trim();
+        const filename = downloadPath.split('/').pop();
+        console.log('DEBUG: Starting download for file:', filename);
+        console.log('DEBUG: Full download path:', downloadPath);
+        console.log('DEBUG: Raw matched string:', downloadMatch[1]);
+        downloadBackupFile(filename, context);
+      } else {
+        console.log('DEBUG: No DOWNLOAD_READY found in output');
+      }
+    } else {
+      console.log('DEBUG: Download not triggered - conditions not met');
+    }
+  }
+
+  // Function to toggle ZIP password visibility
+  function toggleZipPasswordVisibility(tabname) {
+    const passwordInput = document.getElementById('zipPassword_' + tabname);
+    const checkbox = document.getElementById('showZipPassword_' + tabname);
+    
+    if (checkbox.checked) {
+      passwordInput.type = 'text';
+    } else {
+      passwordInput.type = 'password';
+    }
+  }
+
+  // Update backup location description for auto-start tab
+  function updateBackupLocationDescription() {
+    const location = document.getElementById('backupLocation').value;
+    const desc = document.getElementById('backupLocationDescription');
+    
+    if (location === 'download') {
+      desc.textContent = 'LUKS headers will always be backed up for safety. Files will be downloaded to your browser\'s download folder.';
+    } else {
+      desc.textContent = 'LUKS headers will always be backed up for safety. Files will be saved to /boot/config/luksheaders/ on your Unraid boot device.';
+    }
+  }
+
+  // Update backup location description for LUKS headers tab (legacy function - no longer used in card workflow)
+  function updateHeadersBackupLocationDescription() {
+    // This function is no longer needed with the card-based workflow
+    // Kept for backward compatibility but does nothing
+    return;
+  }
+
+  // Smart state detection functions for new interface
+  function loadSmartStatus() {
+    console.log('DEBUG: Loading smart status...');
+    
+    // Show loading indicator
+    document.getElementById('smartStatusLoading').style.display = 'block';
+    hideAllStateCards();
+    
+    fetch('/plugins/encrypted-drive-manager/scripts/get_smart_status.php', {
+      method: 'GET',
+      credentials: 'same-origin'
+    })
+    .then(response => {
+      console.log('DEBUG: Smart status HTTP response status:', response.status);
+      console.log('DEBUG: Smart status response headers:', response.headers);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return response.text(); // Get as text first to see raw response
+    })
+    .then(text => {
+      console.log('DEBUG: Smart status raw response text:', text);
+      
+      try {
+        const data = JSON.parse(text);
+        console.log('DEBUG: Smart status parsed JSON:', data);
+        displaySmartState(data);
+      } catch (parseError) {
+        console.error('DEBUG: JSON parse error:', parseError);
+        throw new Error(`Invalid JSON response: ${text.substring(0, 200)}...`);
+      }
+    })
+    .catch(error => {
+      console.error('DEBUG: Smart status error:', error);
+      // Hide loading indicator and show manual refresh option
+      document.getElementById('smartStatusLoading').style.display = 'none';
+      document.getElementById('manualRefreshOption').style.display = 'block';
+      hideAllStateCards();
+    });
+  }
+  
+  function displaySmartState(statusData) {
+    // Hide loading indicator
+    document.getElementById('smartStatusLoading').style.display = 'none';
+    hideAllStateCards();
+    
+    const systemState = statusData.system_state || 'unknown';
+    const autoUnlockEnabled = statusData.auto_unlock_enabled || false;
+    const unlockableDevices = statusData.unlockable_devices || 'none';
+    
+    // Extract just the device count from the unlockableDevices string
+    // Format is typically: "2 device(s): md1p1, md2p1" - we want just "2 device(s)"
+    const deviceCountOnly = unlockableDevices.includes(':') ? 
+      unlockableDevices.split(':')[0].trim() : unlockableDevices;
+    
+    console.log('DEBUG: Smart status data received:', statusData);
+    console.log('DEBUG: System state:', systemState, 'Auto-unlock enabled:', autoUnlockEnabled);
+    console.log('DEBUG: Keys exist:', statusData.keys_exist, 'Keys work:', statusData.keys_work);
+    console.log('DEBUG: Device count only:', deviceCountOnly);
+    console.log('DEBUG: Debug info:', statusData.debug);
+    
+    switch (systemState) {
+      case 'array_stopped':
+        document.getElementById('stateArrayStopped').style.display = 'block';
+        break;
+        
+      case 'setup_required':
+        document.getElementById('stateSetupRequired').style.display = 'block';
+        break;
+        
+      case 'no_encrypted_disks':
+        document.getElementById('stateNoEncryptedDisks').style.display = 'block';
+        break;
+        
+      case 'ready_disabled':
+        document.getElementById('stateReadyDisabled').style.display = 'block';
+        document.getElementById('unlockableDevicesDisabled').textContent = deviceCountOnly;
+        break;
+        
+      case 'ready_enabled':
+        document.getElementById('stateReadyEnabled').style.display = 'block';
+        document.getElementById('unlockableDevicesEnabled').textContent = deviceCountOnly;
+        break;
+        
+      default:
+        // Show error state
+        document.getElementById('smartStatusLoading').style.display = 'block';
+        document.getElementById('smartStatusLoading').innerHTML = 
+          '<strong style="color: #ff6b6b;">Unknown system state: ' + systemState + '. Please refresh the page.</strong>';
+    }
+  }
+  
+  function hideAllStateCards() {
+    document.getElementById('stateArrayStopped').style.display = 'none';
+    document.getElementById('stateSetupRequired').style.display = 'none';
+    document.getElementById('stateNoEncryptedDisks').style.display = 'none';
+    document.getElementById('stateReadyDisabled').style.display = 'none';
+    document.getElementById('stateReadyEnabled').style.display = 'none';
+    document.getElementById('manualRefreshOption').style.display = 'none';
+  }
+  
+  
+  function toggleAutoUnlock(enable) {
+    console.log('DEBUG: toggleAutoUnlock called with enable:', enable);
+    
+    // Show loading message in current card instead of status tab
+    showInCardMessage(enable ? 'Enabling auto-unlock...' : 'Disabling auto-unlock...', 0);
+    
+    const action = enable ? 'enable' : 'disable';
+    const postData = { action: action };
+    
+    if (csrf_token) {
+      postData.csrf_token = csrf_token;
+    }
+    
+    fetch('/plugins/encrypted-drive-manager/scripts/run_event_script.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(postData).toString()
+    })
+    .then(response => response.text())
+    .then(data => {
+      console.log('DEBUG: Toggle response:', data);
+      
+      // Check for success/failure in response
+      if (data.includes('successfully')) {
+        // Show brief success message in card
+        showInCardMessage(enable ? 'Auto-unlock enabled successfully! Transitioning...' : 'Auto-unlock disabled successfully! Transitioning...', 2000);
+        
+        // Refresh smart status to update state cards (orange ↔ green) after brief delay
+        setTimeout(() => {
+          loadSmartStatus();
+        }, 1500);
+      } else {
+        // Show error in card
+        showInCardMessage('Operation failed. Check Status tab for details.', 5000);
+        // For errors, also show in status tab for debugging
+        showTab('status');
+        setStatus('Error: ' + data);
+      }
+    })
+    .catch(error => {
+      console.error('DEBUG: Toggle error:', error);
+      showInCardMessage('Network error occurred. Check Status tab for details.', 5000);
+      // Also show in status tab for debugging
+      showTab('status');
+      setStatus('Error: Failed to toggle auto-unlock - ' + error.message);
+      // Reload status to get current state
+      loadSmartStatus();
+    });
+  }
+  
+  function showSetupForm() {
+    console.log('DEBUG: showSetupForm called');
+    
+    // Hide all state cards
+    hideAllStateCards();
+    
+    // Show the setup form
+    document.getElementById('setupForm').style.display = 'block';
+    
+    // Clear any previous form data
+    document.getElementById('passphrase_autostart').value = '';
+    document.getElementById('keyfile_autostart').value = '';
+    document.getElementById('zipPassword_autostart').value = '';
+    
+    // Reset to passphrase mode
+    document.getElementById('keyType_autostart').value = 'passphrase';
+    toggleKeyInput('autostart');
+  }
+  
+  
+  function hideSetupForm() {
+    console.log('DEBUG: hideSetupForm called');
+    
+    // Hide the setup form
+    document.getElementById('setupForm').style.display = 'none';
+    
+    // Reload smart status to refresh the page state
+    loadSmartStatus();
+  }
+
+
+  // Initialize descriptions and status on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    updateBackupLocationDescription();
+    updateHeadersBackupLocationDescription();
+    
+    // Initialize smart status detection
+    loadSmartStatus();
+  });
+
+</script>
