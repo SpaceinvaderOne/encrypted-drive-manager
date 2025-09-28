@@ -1,0 +1,210 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+<!ENTITY name                 "encrypted-drive-manager-test">
+<!ENTITY author               "SpaceInvaderOne">
+<!ENTITY plugin_version       "2025.09.28.2123">
+<!ENTITY launch_page          "Utilities/encrypted-drive-manager">
+<!ENTITY plugin_url           "https://raw.githubusercontent.com/SpaceinvaderOne/encrypted-drive-manager/main/test/test.plg">
+<!ENTITY txz_url              "https://github.com/SpaceinvaderOne/encrypted-drive-manager/raw/main/test/encrypted-drive-manager-2025.09.28.2123-x86_64.txz">
+<!ENTITY plugin_md5           "cdc60d1952f3898e072c89f3895be8d3">
+]>
+
+<PLUGIN name="&name;" author="&author;" version="&plugin_version;" min="6.11.0" launch="&launch_page;" icon="EDM-Icon.png" pluginURL="&plugin_url;">
+
+<CHANGES>
+### 2025.09.28 (Testing Version)
+- Enhanced security architecture with Argon2id key derivation (34-68 year brute force resistance)
+- Fixed cryptsetup compatibility issues (removed --stdin option)
+- Resolved status detection problems on fresh installations
+- Added per-installation salt generation for rainbow table protection
+- **WARNING: This is a TESTING version for development purposes**
+</CHANGES>
+
+
+<!-- INSTALLATION: Downloads and installs the main plugin package. -->
+<FILE Name="/boot/config/plugins/&name;/encrypted-drive-manager-&plugin_version;-x86_64.txz" Run="upgradepkg --install-new">
+  <URL>&txz_url;</URL>
+  <MD5>&plugin_md5;</MD5>
+</FILE>
+
+<!-- POST-INSTALL: Setup plugin scripts and event infrastructure -->
+<FILE Run="/bin/bash">
+<INLINE><![CDATA[
+echo ""
+echo "----------------------------------------------------"
+echo " Setting up TESTING plugin scripts and event infrastructure..."
+echo " WARNING: This is a TESTING version with enhanced security!"
+echo "----------------------------------------------------"
+
+PLUGIN_SCRIPTS_DIR="/usr/local/emhttp/plugins/encrypted-drive-manager/scripts"
+PERSISTENT_DIR="/boot/config/plugins/encrypted-drive-manager-test"
+EVENT_STARTING_DIR="/usr/local/emhttp/webGui/event/starting"
+EVENT_STARTED_DIR="/usr/local/emhttp/webGui/event/started"
+
+# Create persistent directory
+mkdir -p "$PERSISTENT_DIR"
+echo " Created persistent directory: $PERSISTENT_DIR"
+
+# Create event directories
+mkdir -p "$EVENT_STARTING_DIR"
+mkdir -p "$EVENT_STARTED_DIR"
+echo " Created event directories for auto-unlock functionality"
+
+# Clean up old package files (keep only the current version)
+echo " Cleaning up old package files..."
+INSTALLED_VERSION_FILE="/usr/local/emhttp/plugins/encrypted-drive-manager/VERSION"
+if [[ -f "$INSTALLED_VERSION_FILE" ]]; then
+    CURRENT_VERSION=$(cat "$INSTALLED_VERSION_FILE")
+    echo " Current installed version: $CURRENT_VERSION"
+    
+    # Keep only the package that matches the installed version
+    find "$PERSISTENT_DIR/" -name "encrypted-drive-manager*.txz" ! -name "*${CURRENT_VERSION}*" -delete 2>/dev/null || true
+    echo " Cleaned up old packages, kept version: $CURRENT_VERSION"
+else
+    echo " Warning: Could not determine installed version for cleanup"
+fi
+
+# Create plugin config file with default settings
+CONFIG_FILE="$PERSISTENT_DIR/config"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "AUTO_UNLOCK_ENABLED=false" > "$CONFIG_FILE"
+    echo " Created TESTING plugin config file with auto-unlock disabled by default"
+fi
+
+# Set executable permissions on plugin scripts
+if [[ -d "$PLUGIN_SCRIPTS_DIR" ]]; then
+    chmod +x "$PLUGIN_SCRIPTS_DIR"/*.sh 2>/dev/null || true
+    chmod +x "$PLUGIN_SCRIPTS_DIR"/*.php 2>/dev/null || true
+    echo " Set permissions for plugin script files"
+else
+    echo " Warning: Scripts directory not found at $PLUGIN_SCRIPTS_DIR"
+fi
+
+# Copy scripts to persistent location for event system use
+if [[ -f "$PLUGIN_SCRIPTS_DIR/fetch_key.sh" ]]; then
+    cp "$PLUGIN_SCRIPTS_DIR/fetch_key.sh" "$PERSISTENT_DIR/fetch_key"
+    chmod +x "$PERSISTENT_DIR/fetch_key"
+    echo " Copied fetch_key script to persistent location"
+else
+    echo " Warning: fetch_key.sh not found in $PLUGIN_SCRIPTS_DIR"
+fi
+
+if [[ -f "$PLUGIN_SCRIPTS_DIR/delete_key.sh" ]]; then
+    cp "$PLUGIN_SCRIPTS_DIR/delete_key.sh" "$PERSISTENT_DIR/delete_key"
+    chmod +x "$PERSISTENT_DIR/delete_key"
+    echo " Copied delete_key script to persistent location"
+else
+    echo " Warning: delete_key.sh not found in $PLUGIN_SCRIPTS_DIR"
+fi
+
+# Check if auto-unlock is enabled and recreate event files if needed
+CONFIG_FILE="$PERSISTENT_DIR/config"
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+    if [[ "$AUTO_UNLOCK_ENABLED" == "true" ]]; then
+        echo " Auto-unlock is enabled - creating event files for boot..."
+        
+        # Create event directories
+        mkdir -p "$EVENT_STARTING_DIR"
+        mkdir -p "$EVENT_STARTED_DIR"
+        
+        # Copy scripts to event directories (same as old working plugin)
+        if [[ -f "$PERSISTENT_DIR/fetch_key" ]] && [[ -f "$PERSISTENT_DIR/delete_key" ]]; then
+            install -D "$PERSISTENT_DIR/fetch_key" "$EVENT_STARTING_DIR/fetch_key"
+            install -D "$PERSISTENT_DIR/delete_key" "$EVENT_STARTED_DIR/delete_key"
+            chmod +x "$EVENT_STARTING_DIR/fetch_key" "$EVENT_STARTED_DIR/delete_key"
+            echo " Event files created - auto-unlock ready"
+        else
+            echo "Source scripts not found - auto-unlock may not work"
+        fi
+    else
+        echo " Auto-unlock is disabled - no event files created"
+    fi
+else
+    echo " No config file found - auto-unlock disabled by default"
+    # Ensure any existing event files are removed
+    rm -f "$EVENT_STARTING_DIR/fetch_key"
+    rm -f "$EVENT_STARTED_DIR/delete_key"
+fi
+
+echo ""
+echo "----------------------------------------------------"
+echo " TESTING Encrypted Drive Manager version &plugin_version; has been installed."
+echo " Enhanced Argon2id security: 34-68 year brute force resistance"
+echo " Event infrastructure ready - auto-unlock managed automatically"
+echo " Scripts are available at: $PERSISTENT_DIR"
+echo " WARNING: This is a TESTING version - use with caution!"
+echo "----------------------------------------------------"
+echo ""
+]]></INLINE>
+</FILE>
+
+<!-- UNINSTALL: Complete cleanup including event scripts -->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE><![CDATA[
+echo ""
+echo "----------------------------------------------------"
+echo " Performing complete TESTING Encrypted Drive Manager cleanup..."
+echo "----------------------------------------------------"
+
+# FIRST: Remove event scripts (disable auto-unlock)
+EVENT_STARTING_DIR="/usr/local/emhttp/webGui/event/starting"
+EVENT_STARTED_DIR="/usr/local/emhttp/webGui/event/started"
+
+if [[ -f "$EVENT_STARTING_DIR/fetch_key" ]]; then
+    rm "$EVENT_STARTING_DIR/fetch_key"
+    echo " Removed fetch_key event script"
+fi
+
+if [[ -f "$EVENT_STARTED_DIR/delete_key" ]]; then
+    rm "$EVENT_STARTED_DIR/delete_key"
+    echo " Removed delete_key event script"
+fi
+
+# Remove any legacy go file modifications (from previous versions)
+GO_FILE="/boot/config/go"
+START_MARKER="# auto unlock block start"
+END_MARKER="# auto unlock block end"
+
+if [[ -f "$GO_FILE" ]] && grep -q "$START_MARKER" "$GO_FILE"; then
+    echo " Removing legacy auto-unlock block from go file..."
+    sed -i.bak "/$START_MARKER/,$END_MARKER/d" "$GO_FILE"
+    echo " Legacy auto-unlock block removed (backup saved as ${GO_FILE}.bak)"
+fi
+
+# Remove plugin packages from the system
+echo " Removing TESTING plugin packages..."
+for pkg in $(ls /var/log/packages/ | grep "^encrypted-drive-manager-test-" 2>/dev/null); do
+    removepkg "$pkg" 2>/dev/null || true
+done
+
+# Clean up plugin directory 
+PLUGIN_DIR="/usr/local/emhttp/plugins/encrypted-drive-manager"
+if [[ -d "$PLUGIN_DIR" ]]; then
+    echo " Removing plugin files from $PLUGIN_DIR"
+    rm -rf "$PLUGIN_DIR" 2>/dev/null || true
+fi
+
+# Clean up persistent config directory (includes our copied scripts)
+CONFIG_DIR="/boot/config/plugins/encrypted-drive-manager-test"
+if [[ -d "$CONFIG_DIR" ]]; then
+    echo " Removing TESTING persistent files from $CONFIG_DIR"
+    rm -rf "$CONFIG_DIR" 2>/dev/null || true
+fi
+
+# Note about LUKS header backups (intentionally preserved for security)
+LUKS_BACKUP_DIR="/boot/config/luksheaders"
+if [[ -d "$LUKS_BACKUP_DIR" ]]; then
+    echo " Note: LUKS header backups preserved in $LUKS_BACKUP_DIR for security"
+fi
+
+echo ""
+echo "----------------------------------------------------"
+echo " Complete TESTING cleanup finished - system restored to pre-install state"
+echo " TESTING Encrypted Drive Manager has been successfully removed."
+echo "----------------------------------------------------"
+echo ""
+]]></INLINE>
+</FILE>
+
+</PLUGIN>
