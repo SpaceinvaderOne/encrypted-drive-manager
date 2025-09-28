@@ -38,7 +38,7 @@ Hardware Key = SHA256(motherboard_serial + "_" + gateway_mac)
 
 ### Motivation and Security Benefits
 
-Many users store their LUKS keyfiles on the Unraid server itself and reference them in the go file for automatic array startup. This approach has a critical security flaw: if the server is stolen, it will simply download and use the same keyfile, providing no theft protection.
+Many users store their LUKS keyfiles on the Unraid server itself (or download them over ftp etc) and reference them in the go file for automatic array startup. This approach has a critical security flaw: if the server is stolen, it will simply download and use the same keyfile, providing no theft protection.
 
 This plugin solves this problem by creating hardware-bound keys that are tied to the physical location and hardware of your server, making automatic unlock fail if the server is moved to a different environment.
 
