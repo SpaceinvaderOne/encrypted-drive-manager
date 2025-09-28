@@ -2,11 +2,11 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name                 "encrypted-drive-manager-test">
 <!ENTITY author               "SpaceInvaderOne">
-<!ENTITY plugin_version       "2025.09.28.2123">
+<!ENTITY plugin_version       "2025.09.28.2327">
 <!ENTITY launch_page          "Utilities/encrypted-drive-manager">
 <!ENTITY plugin_url           "https://raw.githubusercontent.com/SpaceinvaderOne/encrypted-drive-manager/main/test/test.plg">
-<!ENTITY txz_url              "https://github.com/SpaceinvaderOne/encrypted-drive-manager/raw/main/test/encrypted-drive-manager-2025.09.28.2123-x86_64.txz">
-<!ENTITY plugin_md5           "cdc60d1952f3898e072c89f3895be8d3">
+<!ENTITY txz_url              "https://github.com/SpaceinvaderOne/encrypted-drive-manager/raw/main/test/encrypted-drive-manager-2025.09.28.2327-x86_64.txz">
+<!ENTITY plugin_md5           "615783ea4a53029030cdef919635b294">
 ]>
 
 <PLUGIN name="&name;" author="&author;" version="&plugin_version;" min="6.11.0" launch="&launch_page;" icon="EDM-Icon.png" pluginURL="&plugin_url;">
@@ -15,6 +15,7 @@
 ### 2025.09.28 (Testing Version)
 - Enhanced security architecture with Argon2id key derivation (34-68 year brute force resistance)
 - Fixed cryptsetup compatibility issues (removed --stdin option)
+- Added Python 3 detection with user-friendly warning system for Unraid 7.1 compatibility
 - Resolved status detection problems on fresh installations
 - Added per-installation salt generation for rainbow table protection
 - **WARNING: This is a TESTING version for development purposes**
